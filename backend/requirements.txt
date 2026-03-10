@@ -1,0 +1,6 @@
+anthropic
+openai
+feedparser
+requests
+python-dotenv
+colorama
