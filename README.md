@@ -1,114 +1,90 @@
-# Supply Chain Risk Summarizer — Full Stack
+# Supply Chain Risk Summarizer
 
-## Project Structure
+FastAPI backend for analyzing shipment risk from logistics news signals. The app fetches or mocks news, extracts structured disruption signals with an LLM, matches those signals against shipments, and stores run history in PostgreSQL.
 
+## Repo Layout
+
+```text
+backend/
+  core/          Risk extraction, matching, and analysis logic
+  data/          Sample shipment data
+  db/            SQLAlchemy models, CRUD, and database setup
+  providers/     LLM provider adapter layer
+  server.py      FastAPI app entrypoint
+  main.py        CLI pipeline entrypoint
+  requirements.txt
+frontend/        Frontend workspace placeholder
 ```
-supply-chain-risk/          ← pipeline (from previous step)
-  core/
-  providers/
-  data/
-  main.py
 
-supply-chain-fullstack/
-  backend/
-    server.py               ← FastAPI server
-  frontend/
-    src/
-      App.jsx               ← React dashboard
-```
+## Requirements
 
----
+- Python 3.12 recommended
+- PostgreSQL running locally or a reachable `DATABASE_URL`
+- One configured LLM provider: `claude`, `openai`, or `ollama`
 
-## Setup
+## Backend Setup
 
-### 1. Install Python dependencies
+1. Create and activate a virtual environment.
+2. Install dependencies:
 
 ```bash
-cd supply-chain-risk
-pip install -r requirements.txt
-pip install fastapi uvicorn python-multipart
+pip install -r backend/requirements.txt
+pip install fastapi uvicorn python-multipart sqlalchemy psycopg2-binary
 ```
 
-### 2. Configure your .env
+3. Create a root `.env` or copy from `backend/.env.example`.
 
-```bash
-cp .env.example .env
+Required environment values:
+
+```env
+LLM_PROVIDER=claude
+ANTHROPIC_API_KEY=your_key_here
+OPENAI_API_KEY=your_key_here
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3
+NEWS_API_KEY=your_key_here
+DATABASE_URL=postgresql://postgres:password@localhost:5432/supply_chain_risk
 ```
 
-Edit `.env`:
-```
-LLM_PROVIDER=claude          # or openai, ollama
-ANTHROPIC_API_KEY=sk-ant-...
-```
+## Run The API
 
-### 3. Start the FastAPI server
+Start the FastAPI app from the repo root:
 
-```bash
-# Run from the root folder (so imports resolve)
-uvicorn supply-chain-fullstack.backend.server:app --reload --port 8000
-```
-
-Or if running from inside supply-chain-risk/:
 ```bash
 uvicorn backend.server:app --reload --port 8000
 ```
 
-Test it:
-```
-http://localhost:8000/docs       ← Swagger UI (auto-generated)
-http://localhost:8000/api/health
-```
+Docs and health endpoints:
 
-### 4. Start the React frontend
+- `http://localhost:8000/docs`
+- `http://localhost:8000/api/health`
 
-```bash
-cd supply-chain-fullstack/frontend
-npx create-react-app . --template minimal   # first time only
-# Then replace src/App.js with App.jsx content
-npm start
-```
-
-Or with Vite (faster):
-```bash
-npm create vite@latest frontend -- --template react
-cd frontend
-npm install
-# Replace src/App.jsx with the provided file
-npm run dev
-```
-
----
+Important: application startup initializes the database immediately. If PostgreSQL credentials in `DATABASE_URL` are wrong, startup will fail before the API begins serving requests.
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Server status + LLM provider info |
-| GET | `/api/shipments` | List all loaded shipments |
-| POST | `/api/analyze` | Run full pipeline (live news) |
-| POST | `/api/analyze/mock` | Run with mock news (no internet) |
-| POST | `/api/upload-csv` | Upload custom shipment CSV |
-| GET | `/api/reports/latest` | Get last analysis report |
+- `GET /api/health` returns service status and latest run metadata.
+- `GET /api/shipments` lists shipments in the database.
+- `GET /api/shipments/{shipment_id}` returns one shipment and its risk history.
+- `POST /api/analyze` runs analysis with live news.
+- `POST /api/analyze/mock` runs analysis with bundled mock news.
+- `GET /api/reports/latest` returns the latest report and signals.
+- `GET /api/runs` lists recent runs.
+- `POST /api/upload-csv` replaces shipments from an uploaded CSV.
 
-Swagger docs auto-available at: `http://localhost:8000/docs`
+## Run The CLI Pipeline
 
----
+You can also run the non-API pipeline:
 
-## How the Pipeline Works
-
+```bash
+python backend/main.py --mock-news
+python backend/main.py --csv path/to/shipments.csv
 ```
-[News Fetch] → [Signal Extract — 1 LLM/article] → [Shipment Match — Python only] → [Risk Analyze — 1 LLM/affected shipment]
+
+## Processing Flow
+
+```text
+News fetch -> signal extraction -> shipment matching -> risk analysis -> DB persistence
 ```
 
-Smart filtering means you use ~90% fewer LLM calls vs naive approach.
-
----
-
-## Switching LLM Providers
-
-Just change `LLM_PROVIDER` in your `.env`:
-```
-LLM_PROVIDER=claude    → uses Claude (Anthropic API)
-LLM_PROVIDER=openai    → uses GPT-4o-mini
-LLM_PROVIDER=ollama    → uses local Llama3 via Ollama
-```
+The matching step filters shipments before final risk analysis, which reduces LLM calls compared with a naive shipment-by-article approach.
