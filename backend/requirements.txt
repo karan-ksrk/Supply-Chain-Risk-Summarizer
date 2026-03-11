@@ -1,5 +1,6 @@
 anthropic
 openai
+boto3
 feedparser
 requests
 python-dotenv

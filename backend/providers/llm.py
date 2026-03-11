@@ -1,7 +1,7 @@
 """
 providers/llm.py
 ----------------
-Unified LLM interface supporting Claude, OpenAI, and Ollama.
+Unified LLM interface supporting Claude, OpenAI, Ollama, and AWS Bedrock.
 Swap providers by changing LLM_PROVIDER in your .env file.
 """
 
@@ -25,8 +25,12 @@ def call_llm(prompt: str, system: str = "", expect_json: bool = False) -> str:
         return _call_openai(prompt, system)
     elif PROVIDER == "ollama":
         return _call_ollama(prompt, system)
+    elif PROVIDER == "bedrock":
+        return _call_bedrock(prompt, system)
     else:
-        raise ValueError(f"Unknown LLM_PROVIDER: {PROVIDER}. Choose claude | openai | ollama")
+        raise ValueError(
+            f"Unknown LLM_PROVIDER: {PROVIDER}. Choose claude | openai | ollama | bedrock"
+        )
 
 
 # ── Claude (Anthropic) ──────────────────────────────────────
@@ -80,6 +84,35 @@ def _call_ollama(prompt: str, system: str) -> str:
     )
     response.raise_for_status()
     return response.json()["response"]
+
+
+# ── AWS Bedrock ──────────────────────────────────────────────
+
+def _call_bedrock(prompt: str, system: str) -> str:
+    import boto3
+
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+    model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0")
+
+    client = boto3.client("bedrock-runtime", region_name=region)
+
+    kwargs = {
+        "modelId": model_id,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"text": prompt}],
+            }
+        ],
+        "inferenceConfig": {"maxTokens": 1024},
+    }
+    if system:
+        kwargs["system"] = [{"text": system}]
+
+    response = client.converse(**kwargs)
+    content = response["output"]["message"]["content"]
+    text_parts = [part["text"] for part in content if "text" in part]
+    return "\n".join(text_parts).strip()
 
 
 # ── Helper: safely parse JSON from LLM response ─────────────
