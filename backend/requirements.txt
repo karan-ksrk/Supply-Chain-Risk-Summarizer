@@ -5,3 +5,11 @@ feedparser
 requests
 python-dotenv
 colorama
+sqlalchemy
+psycopg2-binary
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+colorama
+pydantic

@@ -91,28 +91,30 @@ def _call_ollama(prompt: str, system: str) -> str:
 def _call_bedrock(prompt: str, system: str) -> str:
     import boto3
 
-    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
-    model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0")
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-west-2"
+    model_id = os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 
     client = boto3.client("bedrock-runtime", region_name=region)
 
-    kwargs = {
-        "modelId": model_id,
+    # Claude 3+ uses the Messages API format
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 1024,
         "messages": [
-            {
-                "role": "user",
-                "content": [{"text": prompt}],
-            }
+            {"role": "user", "content": prompt}
         ],
-        "inferenceConfig": {"maxTokens": 1024},
     }
     if system:
-        kwargs["system"] = [{"text": system}]
+        body["system"] = system
 
-    response = client.converse(**kwargs)
-    content = response["output"]["message"]["content"]
-    text_parts = [part["text"] for part in content if "text" in part]
-    return "\n".join(text_parts).strip()
+    response = client.invoke_model(
+        modelId=model_id,
+        body=json.dumps(body)
+    )
+
+    response_body = json.loads(response["body"].read().decode())
+    # Claude 3 Messages API returns content as a list of blocks
+    return response_body["content"][0]["text"].strip()
 
 
 # ── Helper: safely parse JSON from LLM response ─────────────
