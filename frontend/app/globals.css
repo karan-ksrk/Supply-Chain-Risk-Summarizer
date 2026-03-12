@@ -23,7 +23,7 @@ html, body {
 ::-webkit-scrollbar-track   { background: var(--canvas); }
 ::-webkit-scrollbar-thumb   { background: #21262d; border-radius: 2px; }
 
-.font-display { font-family: 'Syne', sans-serif; }
+.font-display { font-family: 'math'; }
 
 @keyframes blink {
   0%, 100% { opacity: 1; }

@@ -39,11 +39,11 @@ export default function RunsPage() {
       {error && <Alert message={error} onClose={() => setError("")} />}
 
       {/* Summary */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-3 gap-3 mb-5">
         {[
           { label: "Total Runs",    val: totalRuns,   color: "#58a6ff" },
           { label: "Successful",    val: successRuns, color: "#10b981" },
-          { label: "LLM Calls Saved (total)", val: totalSaved, color: "#8b5cf6" },
+          // { label: "LLM Calls Saved (total)", val: totalSaved, color: "#8b5cf6" },
           { label: "Avg High Risk / Run",     val: avgHighRisk, color: "#ef4444" },
         ].map(({ label, val, color }) => (
           <div key={label} className="bg-surface border border-border rounded-xl p-4">

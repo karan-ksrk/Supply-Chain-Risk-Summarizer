@@ -61,12 +61,12 @@ export default function ReportsPage() {
       ) : (
         <>
           {/* Stats overview */}
-          <div className="grid grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-3 gap-3 mb-5">
             {[
               { label: "Shipments Checked", val: stats?.total_shipments, color: "#58a6ff" },
               { label: "Affected", val: stats?.affected_shipments, color: "#f59e0b" },
               { label: "Signals Found", val: stats?.signals_extracted, color: "#8b5cf6" },
-              { label: "LLM Calls Saved", val: stats?.llm_calls_saved, color: "#10b981" },
+              // { label: "LLM Calls Saved", val: stats?.llm_calls_saved, color: "#10b981" },
             ].map(({ label, val, color }) => (
               <div key={label} className="bg-surface border border-border rounded-xl p-4">
                 <p className="text-[10px] text-muted uppercase tracking-widest mb-1">{label}</p>
@@ -75,11 +75,11 @@ export default function ReportsPage() {
             ))}
           </div>
 
-          <div className="grid grid-cols-[1fr_260px] gap-4 mb-5">
+          <div className="grid grid-cols-1 gap-4 mb-5">
             {/* Risk distribution chart */}
             <Card>
               <CardHeader title="Risk Distribution" />
-              <div className="p-4 h-[180px]">
+              <div className="p-4 h-[380px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} barCategoryGap="30%">
                     <XAxis dataKey="name" tick={{ fill: "#484f58", fontSize: 10, fontFamily: "IBM Plex Mono" }} axisLine={false} tickLine={false} />
@@ -98,7 +98,7 @@ export default function ReportsPage() {
             </Card>
 
             {/* LLM efficiency */}
-            <Card>
+            {/* <Card>
               <CardHeader title="LLM Efficiency" />
               <div className="p-4">
                 <div className="h-[140px]">
@@ -118,7 +118,7 @@ export default function ReportsPage() {
                   {stats?.llm_calls_saved ? `${Math.round((stats.llm_calls_saved / (stats.llm_calls_used + stats.llm_calls_saved)) * 100)}% calls eliminated` : ""}
                 </p>
               </div>
-            </Card>
+            </Card> */}
           </div>
 
           {/* Risk Reports accordion */}

@@ -172,9 +172,9 @@ export default function Dashboard() {
           <Button onClick={() => runAnalysis(true)} disabled={loading} variant="ghost">
             {loading ? <Spinner size={12} /> : "⚙"} Mock News
           </Button>
-          <Button onClick={() => runAnalysis(false)} disabled={loading}>
+          {/* <Button onClick={() => runAnalysis(false)} disabled={loading}>
             {loading ? <Spinner size={12} /> : "▶"} Live Analysis
-          </Button>
+          </Button> */}
         </div>
       </div>
 
@@ -192,12 +192,12 @@ export default function Dashboard() {
       )}
 
       {/* ── Stat Cards ── */}
-      <div className="grid grid-cols-5 gap-3 mb-5">
+      <div className="grid grid-cols-4 gap-3 mb-5">
         <StatCard label="Shipments" value={stats?.total_shipments ?? shipments.length} sub="Loaded" accentColor="#1f6feb" icon="◫" />
         <StatCard label="High Risk" value={stats?.high_risk ?? 0} sub="Immediate action" accentColor="#ef4444" icon="⚠" />
         <StatCard label="Medium Risk" value={stats?.medium_risk ?? 0} sub="Monitor closely" accentColor="#f59e0b" icon="◉" />
         <StatCard label="Signals" value={stats?.signals_extracted ?? 0} sub="News matched" accentColor="#8b5cf6" icon="⊕" />
-        <StatCard label="LLM Saved" value={stats?.llm_calls_saved != null ? `${stats.llm_calls_saved}x` : "—"} sub="Calls avoided" accentColor="#10b981" icon="↯" />
+        {/* <StatCard label="LLM Saved" value={stats?.llm_calls_saved != null ? `${stats.llm_calls_saved}x` : "—"} sub="Calls avoided" accentColor="#10b981" icon="↯" /> */}
       </div>
 
       <div className="grid grid-cols-[1fr_300px] gap-4">
@@ -354,7 +354,7 @@ export default function Dashboard() {
           </Card>
 
           {/* Pipeline stats */}
-          <Card>
+          {/* <Card>
             <CardHeader title="Pipeline Stats" />
             <div className="p-4 flex flex-col gap-2">
               {stats ? (
@@ -372,7 +372,7 @@ export default function Dashboard() {
                 ))
               ) : <Empty message="Run analysis to see stats" />}
             </div>
-          </Card>
+          </Card> */}
 
         </div>
       </div>
