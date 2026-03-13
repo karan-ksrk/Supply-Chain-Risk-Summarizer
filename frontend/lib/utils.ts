@@ -4,6 +4,7 @@ export const RISK_CONFIG = {
   HIGH:   { bg: "bg-red-500/10",    border: "border-red-500",    text: "text-red-400",    dot: "bg-red-500",    bar: "#ef4444" },
   MEDIUM: { bg: "bg-amber-500/10",  border: "border-amber-500",  text: "text-amber-400",  dot: "bg-amber-500",  bar: "#f59e0b" },
   LOW:    { bg: "bg-emerald-500/10",border: "border-emerald-500",text: "text-emerald-400",dot: "bg-emerald-500",bar: "#10b981" },
+  PENDING:{ bg: "bg-slate-500/10",  border: "border-slate-500",  text: "text-slate-300",  dot: "bg-slate-400",  bar: "#94a3b8" },
 } as const;
 
 export type RiskLevel = keyof typeof RISK_CONFIG;

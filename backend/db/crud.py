@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
-from backend.db.models import Shipment, AnalysisRun, NewsSignal, RiskReport
+from backend.db.models import Shipment, AnalysisRun, NewsSignal, RiskReport, RouteCache
 
 
 # ── Shipments ────────────────────────────────────────────────
@@ -154,3 +154,24 @@ def get_risk_history_for_shipment(db: Session, shipment_id: str, limit: int = 10
         .limit(limit)
         .all()
     )
+
+
+# ── Route cache ──────────────────────────────────────────────
+
+def get_route_cache(db: Session, route_key: str) -> RouteCache | None:
+    return db.query(RouteCache).filter(RouteCache.route_key == route_key).first()
+
+
+def upsert_route_cache(db: Session, payload: dict) -> RouteCache:
+    cache = get_route_cache(db, payload["route_key"])
+    if cache:
+        for key, val in payload.items():
+            if hasattr(cache, key):
+                setattr(cache, key, val)
+        cache.updated_at = datetime.utcnow()
+    else:
+        cache = RouteCache(**payload)
+        db.add(cache)
+    db.commit()
+    db.refresh(cache)
+    return cache

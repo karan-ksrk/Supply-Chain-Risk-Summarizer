@@ -52,6 +52,42 @@ export interface RiskReport {
   route?: string;
   eta?: string;
   carrier?: string;
+  created_at?: string;
+}
+
+export type MapRiskLevel = "HIGH" | "MEDIUM" | "LOW" | "PENDING";
+
+export interface ShipmentMapLocation {
+  city: string;
+  country: string;
+  port: string;
+  lat: number | null;
+  lng: number | null;
+}
+
+export interface ShipmentMapRoute {
+  kind: "searoute" | "fallback";
+  coordinates: [number, number][];
+  distance_nm?: number | null;
+  source: "searoute-library" | "fallback";
+}
+
+export interface ShipmentMapFeature {
+  shipment_id: string;
+  vendor: string;
+  transport_mode: string;
+  carrier: string;
+  eta: string;
+  origin: ShipmentMapLocation;
+  destination: ShipmentMapLocation;
+  route: ShipmentMapRoute;
+  status: MapRiskLevel;
+  risk_report: RiskReport | null;
+}
+
+export interface ShipmentMapResponse {
+  shipments: ShipmentMapFeature[];
+  count: number;
 }
 
 export interface PipelineStats {
@@ -120,6 +156,9 @@ export const api = {
 
   getShipment: (id: string) =>
     apiFetch<{ shipment: Shipment; risk_history: RiskReport[] }>(`/shipments/${id}`),
+
+  getShipmentMap: () =>
+    apiFetch<ShipmentMapResponse>("/shipments/map"),
 
   analyze: (useMockNews = false) =>
     apiFetch<AnalysisResult>("/analyze", {

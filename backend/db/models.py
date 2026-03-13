@@ -107,3 +107,24 @@ class RiskReport(Base):
     # Relationships
     shipment = relationship("Shipment", back_populates="risk_reports")
     run = relationship("AnalysisRun", back_populates="risk_reports")
+
+
+class RouteCache(Base):
+    __tablename__ = "route_cache"
+
+    route_key = Column(String, primary_key=True, index=True)
+    transport_mode = Column(String, nullable=False)
+    origin_query = Column(String, nullable=False)
+    dest_query = Column(String, nullable=False)
+    origin_lat = Column(Float, nullable=True)
+    origin_lng = Column(Float, nullable=True)
+    dest_lat = Column(Float, nullable=True)
+    dest_lng = Column(Float, nullable=True)
+    route_kind = Column(String, nullable=False, default="fallback")
+    route_source = Column(String, nullable=False, default="fallback")
+    distance_nm = Column(Float, nullable=True)
+    raw_geojson = Column(JSON, nullable=True)
+    normalized_coordinates = Column(JSON, default=list)
+    route_metadata = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

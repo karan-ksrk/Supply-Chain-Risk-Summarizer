@@ -46,6 +46,12 @@ NEWS_API_KEY=your_key_here
 DATABASE_URL=postgresql://postgres:password@localhost:5432/supply_chain_risk
 ```
 
+Optional route-map integration:
+
+- Install the Python `searoute` library in the same environment as the backend.
+- Sea shipments use the library directly inside the FastAPI process to generate GeoJSON-like route geometry.
+- If `searoute` is unavailable at runtime, sea shipments fall back to straight-line geometry and the map still renders.
+
 ## Run The API
 
 Start the FastAPI app from the repo root:

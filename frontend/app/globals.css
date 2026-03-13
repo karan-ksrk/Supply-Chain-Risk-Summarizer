@@ -30,3 +30,24 @@ html, body {
   50%       { opacity: 0.2; }
 }
 .animate-blink { animation: blink 1.8s ease-in-out infinite; }
+
+.leaflet-container {
+  font-family: 'IBM Plex Mono', monospace;
+  background: #030712;
+}
+
+.leaflet-control-attribution {
+  background: rgba(1, 4, 9, 0.72) !important;
+  color: #8b949e !important;
+}
+
+.leaflet-control-attribution a {
+  color: #c9d1d9 !important;
+}
+
+.leaflet-tooltip {
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #21262d;
+  box-shadow: none;
+}

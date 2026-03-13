@@ -49,8 +49,6 @@ export default function ShipmentsPage() {
     s.dest_city.toLowerCase().includes(search.toLowerCase())
   );
 
-  const modes = [...new Set(shipments.map(s => s.transport_mode))];
-
   return (
     <div className="p-6 max-w-[1200px] mx-auto">
       {/* Header */}

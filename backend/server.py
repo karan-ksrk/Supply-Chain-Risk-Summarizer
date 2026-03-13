@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.news_fetcher import fetch_news
 from backend.core.risk_analyzer import analyze_risks
+from backend.core.route_resolver import build_map_feature
 from backend.core.shipment_matcher import match_shipments_to_signals
 from backend.core.signal_extractor import extract_signals
 from backend.data.shipments import SAMPLE_SHIPMENTS
@@ -21,6 +22,7 @@ from backend.db.database import get_db, init_db
 from backend.providers.llm import PROVIDER
 
 _is_running = False
+_local_latest_report: dict | None = None
 LOCAL_SHIPMENTS_FLAG = "USE_LOCAL_SAMPLE_SHIPMENTS"
 
 MOCK_NEWS = [
@@ -76,18 +78,44 @@ def get_shipments(db: Session = Depends(get_db)):
     return {"shipments": shipments, "count": len(shipments)}
 
 
+@app.get("/api/shipments/map")
+def get_shipments_map(db: Session = Depends(get_db)):
+    shipments = _get_shipments(db)
+    if _use_local_sample_shipments() and _local_latest_report:
+        reports_by_shipment = {
+            report["shipment_id"]: report
+            for report in _local_latest_report.get("risk_reports", [])
+        }
+    else:
+        reports = crud.get_latest_reports(db)
+        reports_by_shipment = {r.shipment_id: _r(r) for r in reports}
+    features = [build_map_feature(db, shipment, reports_by_shipment.get(shipment.get("shipment_id"))) for shipment in shipments]
+    return {"shipments": features, "count": len(features)}
+
+
 @app.get("/api/shipments/{shipment_id}")
 def get_shipment(shipment_id: str, db: Session = Depends(get_db)):
     s = _get_shipment(db, shipment_id)
     if not s:
         raise HTTPException(404, f"Shipment {shipment_id} not found")
-    history = [] if _use_local_sample_shipments() else crud.get_risk_history_for_shipment(db, shipment_id)
+    if _use_local_sample_shipments():
+        history = []
+        if _local_latest_report:
+            matching = [
+                report for report in _local_latest_report.get("risk_reports", [])
+                if report.get("shipment_id") == shipment_id
+            ]
+            history = matching
+        return {"shipment": s, "risk_history": history}
+
+    history = crud.get_risk_history_for_shipment(db, shipment_id)
     return {"shipment": s, "risk_history": [_r(r) for r in history]}
 
 
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
     global _is_running
+    global _local_latest_report
     if _is_running:
         raise HTTPException(409, "Analysis already running.")
     _is_running = True
@@ -100,25 +128,36 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
         if not signals:
             crud.complete_run(db, run, _empty_stats(shipments, articles), status="no_signals")
-            return {"status": "no_signals", "run_id": run.id, "risk_reports": [], "signals": []}
+            payload = {"status": "no_signals", "run_id": run.id, "generated_at": run.run_at.isoformat(), "risk_reports": [], "signals": [], "stats": _empty_stats(shipments, articles)}
+            if _use_local_sample_shipments():
+                _local_latest_report = payload
+            return payload
 
         crud.save_signals(db, run.id, signals)
         affected = match_shipments_to_signals([s.copy() for s in shipments], signals)
 
         if not affected:
-            crud.complete_run(db, run, {**_empty_stats(shipments, articles),
-                              "signals_extracted": len(signals)}, status="no_affected")
-            return {"status": "no_affected", "run_id": run.id, "risk_reports": [], "signals": signals}
+            stats = {**_empty_stats(shipments, articles), "signals_extracted": len(signals)}
+            crud.complete_run(db, run, stats, status="no_affected")
+            payload = {"status": "no_affected", "run_id": run.id, "generated_at": run.run_at.isoformat(), "risk_reports": [], "signals": signals, "stats": stats}
+            if _use_local_sample_shipments():
+                _local_latest_report = payload
+            return payload
 
         risk_reports = analyze_risks(affected)
         if not _use_local_sample_shipments():
             crud.save_risk_reports(db, run.id, risk_reports)
         stats = _build_stats(risk_reports, shipments, articles, signals)
         crud.complete_run(db, run, stats)
+        payload = {"status": "success", "run_id": run.id, "generated_at": run.run_at.isoformat(), "risk_reports": risk_reports, "signals": signals, "stats": stats}
+        if _use_local_sample_shipments():
+            _local_latest_report = payload
 
-        return {"status": "success", "run_id": run.id, "generated_at": run.run_at.isoformat(), "risk_reports": risk_reports, "signals": signals, "stats": stats}
+        return payload
 
     except Exception as e:
+        if _use_local_sample_shipments():
+            _local_latest_report = None
         crud.complete_run(db, run, {}, status="failed", error=str(e))
         raise HTTPException(500, str(e))
     finally:
@@ -132,6 +171,11 @@ async def analyze_mock(db: Session = Depends(get_db)):
 
 @app.get("/api/reports/latest")
 def latest_report(db: Session = Depends(get_db)):
+    if _use_local_sample_shipments():
+        if not _local_latest_report:
+            raise HTTPException(404, "No report yet.")
+        return _local_latest_report
+
     run = crud.get_latest_run(db)
     if not run:
         raise HTTPException(404, "No report yet.")
@@ -192,7 +236,7 @@ def _get_shipment(db: Session, shipment_id: str) -> dict | None:
 
 
 def _r(r) -> dict:
-    return {k: getattr(r, k, None) for k in ["shipment_id", "risk_level", "delay_estimate", "primary_risk", "explanation", "suggested_action", "confidence", "matched_signals"]}
+    return {k: getattr(r, k, None) for k in ["shipment_id", "risk_level", "delay_estimate", "primary_risk", "explanation", "suggested_action", "confidence", "matched_signals", "created_at"]}
 
 
 def _sig(s) -> dict:
