@@ -108,7 +108,7 @@ def main():
         print("📡 Using mock news articles (--mock-news flag set)")
         articles = MOCK_NEWS
     else:
-        articles = fetch_news(max_articles=15)
+        articles = fetch_news(max_articles=15, shipments=shipments)
 
     # ── Step 2: Extract risk signals (1 LLM call per article)
     signals = extract_signals(articles)

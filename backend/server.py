@@ -5,6 +5,7 @@ backend/server.py — FastAPI + PostgreSQL
 from contextlib import asynccontextmanager
 import io
 import csv
+import os
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,6 +21,7 @@ from backend.db.database import get_db, init_db
 from backend.providers.llm import PROVIDER
 
 _is_running = False
+LOCAL_SHIPMENTS_FLAG = "USE_LOCAL_SAMPLE_SHIPMENTS"
 
 MOCK_NEWS = [
     {"title": "Houthi attacks force vessels to reroute away from Red Sea",
@@ -38,7 +40,7 @@ async def lifespan(app: FastAPI):
     init_db()
     db = next(get_db())
     try:
-        if not crud.get_all_shipments(db):
+        if not _use_local_sample_shipments() and not crud.get_all_shipments(db):
             crud.upsert_shipments(db, SAMPLE_SHIPMENTS)
             print(f"Seeded {len(SAMPLE_SHIPMENTS)} sample shipments")
         yield
@@ -58,27 +60,29 @@ class AnalyzeRequest(BaseModel):
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)):
     latest = crud.get_latest_run(db)
+    shipments = _get_shipments(db)
     return {
         "status": "ok",
         "llm_provider": PROVIDER,
-        "shipment_count": len(crud.get_all_shipments(db)),
+        "shipment_count": len(shipments),
         "last_run": latest.run_at.isoformat() if latest else None,
+        "using_local_sample_shipments": _use_local_sample_shipments(),
     }
 
 
 @app.get("/api/shipments")
 def get_shipments(db: Session = Depends(get_db)):
-    shipments = crud.get_all_shipments(db)
-    return {"shipments": [_s(s) for s in shipments], "count": len(shipments)}
+    shipments = _get_shipments(db)
+    return {"shipments": shipments, "count": len(shipments)}
 
 
 @app.get("/api/shipments/{shipment_id}")
 def get_shipment(shipment_id: str, db: Session = Depends(get_db)):
-    s = crud.get_shipment(db, shipment_id)
+    s = _get_shipment(db, shipment_id)
     if not s:
         raise HTTPException(404, f"Shipment {shipment_id} not found")
-    history = crud.get_risk_history_for_shipment(db, shipment_id)
-    return {"shipment": _s(s), "risk_history": [_r(r) for r in history]}
+    history = [] if _use_local_sample_shipments() else crud.get_risk_history_for_shipment(db, shipment_id)
+    return {"shipment": s, "risk_history": [_r(r) for r in history]}
 
 
 @app.post("/api/analyze")
@@ -90,8 +94,8 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
     run = crud.create_run(db, llm_provider=PROVIDER, used_mock_news=req.use_mock_news)
 
     try:
-        shipments = [_s(s) for s in crud.get_all_shipments(db)]
-        articles = MOCK_NEWS if req.use_mock_news else fetch_news(req.max_articles)
+        shipments = _get_shipments(db)
+        articles = MOCK_NEWS if req.use_mock_news else fetch_news(req.max_articles, shipments=shipments)
         signals = extract_signals(articles)
 
         if not signals:
@@ -107,7 +111,8 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
             return {"status": "no_affected", "run_id": run.id, "risk_reports": [], "signals": signals}
 
         risk_reports = analyze_risks(affected)
-        crud.save_risk_reports(db, run.id, risk_reports)
+        if not _use_local_sample_shipments():
+            crud.save_risk_reports(db, run.id, risk_reports)
         stats = _build_stats(risk_reports, shipments, articles, signals)
         crud.complete_run(db, run, stats)
 
@@ -164,6 +169,26 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
 
 def _s(s) -> dict:
     return {k: getattr(s, k, None) for k in ["shipment_id", "vendor", "origin_city", "origin_country", "dest_city", "dest_country", "origin_port", "dest_port", "carrier", "transport_mode", "sku", "sku_category", "route", "departure_date", "eta", "freight_cost_usd"]}
+
+
+def _use_local_sample_shipments() -> bool:
+    return os.getenv(LOCAL_SHIPMENTS_FLAG, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_shipments(db: Session) -> list[dict]:
+    if _use_local_sample_shipments():
+        return [s.copy() for s in SAMPLE_SHIPMENTS]
+    return [_s(s) for s in crud.get_all_shipments(db)]
+
+
+def _get_shipment(db: Session, shipment_id: str) -> dict | None:
+    if _use_local_sample_shipments():
+        for shipment in SAMPLE_SHIPMENTS:
+            if shipment.get("shipment_id") == shipment_id:
+                return shipment.copy()
+        return None
+    shipment = crud.get_shipment(db, shipment_id)
+    return _s(shipment) if shipment else None
 
 
 def _r(r) -> dict:

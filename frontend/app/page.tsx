@@ -172,9 +172,9 @@ export default function Dashboard() {
           <Button onClick={() => runAnalysis(true)} disabled={loading} variant="ghost">
             {loading ? <Spinner size={12} /> : "⚙"} Mock News
           </Button>
-          {/* <Button onClick={() => runAnalysis(false)} disabled={loading}>
+          <Button onClick={() => runAnalysis(false)} disabled={loading}>
             {loading ? <Spinner size={12} /> : "▶"} Live Analysis
-          </Button> */}
+          </Button>
         </div>
       </div>
 
