@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 import { cn, formatDateTime, getRiskConfig } from "@/lib/utils";
 import { Alert, Button, Card, CardHeader, Empty, RiskBadge, RiskBar, Spinner, StatCard } from "@/components/ui";
+import { useAnalysisStore } from "@/lib/store";
 
 const ShipmentMap = dynamic(() => import("@/components/shipment-map"), {
   ssr: false,
@@ -189,31 +190,45 @@ export default function Dashboard() {
   const [mapShipments, setMapShipments] = useState<ShipmentMapFeature[]>([]);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [selected, setSelected] = useState<DrawerSelection | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { loading, error, setLoading, setError } = useAnalysisStore();
   const [stepIdx, setStepIdx] = useState(0);
   const [filter, setFilter] = useState<RiskFilter>("ALL");
   const [tab, setTab] = useState<DashboardTab>("shipments");
-  const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
 
-  const refreshData = useCallback(async () => {
-    const [shipmentsData, mapData] = await Promise.all([
-      api.getShipments(),
-      api.getShipmentMap(),
-    ]);
-    setShipments(shipmentsData.shipments);
-    setMapShipments(mapData.shipments);
+  const refreshData = useCallback(async (signal?: AbortSignal) => {
     try {
-      const latest = await api.getLatestReport();
+      const [shipmentsData, mapData] = await Promise.all([
+        api.getShipments(signal),
+        api.getShipmentMap(signal),
+      ]);
+      setShipments(shipmentsData.shipments);
+      setMapShipments(mapData.shipments);
+
+      let latest = null;
+      try {
+        latest = await api.getLatestReport(signal);
+      } catch (e: any) {
+        if (e.name === "AbortError") throw e;
+        // 404 just means no run yet, ignore
+      }
       setResult(latest);
-    } catch {
+    } catch (err: any) {
+      if (err.name === "AbortError") return;
       setResult(null);
+      setError("Unable to load dashboard data.");
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    refreshData().catch(() => setError("Unable to load dashboard data."));
-  }, [refreshData]);
+    const abortController = new AbortController();
+    refreshData(abortController.signal);
+    return () => {
+      abortController.abort();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!loading) {
@@ -234,11 +249,13 @@ export default function Dashboard() {
       setResult(data);
       await refreshData();
     } catch (e: any) {
-      setError(e.message || "Analysis failed. Is the FastAPI server running on :8000?");
+      if (e.name !== 'AbortError') {
+        setError(e.message || "Analysis failed. Is the FastAPI server running on :8000?");
+      }
     } finally {
       setLoading(false);
     }
-  }, [refreshData]);
+  }, [refreshData, setLoading, setError]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -358,7 +375,7 @@ export default function Dashboard() {
 
           {tab === "shipments" && (
             <Card>
-              <div className="grid grid-cols-[100px_1fr_1fr_80px_110px_90px] px-5 py-2.5 border-b border-border text-[9px] text-muted uppercase tracking-widest">
+              <div className="grid grid-cols-[100px_1.5fr_1.5fr_110px_110px_100px] px-5 py-2.5 border-b border-border text-[9px] text-muted uppercase tracking-widest">
                 <span>ID</span><span>Vendor</span><span>Route</span><span>ETA</span><span>Status</span><span>Delay</span>
               </div>
               {filteredRows.length === 0 ? (
@@ -371,7 +388,7 @@ export default function Dashboard() {
                       key={shipment.shipment_id}
                       onClick={() => setSelected(isSel ? null : toDrawerSelection(shipment))}
                       className={cn(
-                        "grid grid-cols-[100px_1fr_1fr_80px_110px_90px] px-5 py-3 border-b border-border/50 cursor-pointer transition-colors",
+                        "grid grid-cols-[100px_1.5fr_1.5fr_110px_110px_100px] px-5 py-3 border-b border-border/50 cursor-pointer transition-colors",
                         isSel ? "bg-white/[0.03]" : "hover:bg-white/[0.02]",
                       )}
                     >

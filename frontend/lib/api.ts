@@ -133,7 +133,7 @@ export interface HealthResponse {
 
 // ── Fetch helper ─────────────────────────────────────────────────────────────
 
-async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+async function apiFetch<T>(path: string, options?: RequestInit & { signal?: AbortSignal }): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
@@ -148,17 +148,17 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 // ── API methods ───────────────────────────────────────────────────────────────
 
 export const api = {
-  health: () =>
-    apiFetch<HealthResponse>("/health"),
+  health: (signal?: AbortSignal) =>
+    apiFetch<HealthResponse>("/health", { signal }),
 
-  getShipments: () =>
-    apiFetch<{ shipments: Shipment[]; count: number }>("/shipments"),
+  getShipments: (signal?: AbortSignal) =>
+    apiFetch<{ shipments: Shipment[]; count: number }>("/shipments", { signal }),
 
-  getShipment: (id: string) =>
-    apiFetch<{ shipment: Shipment; risk_history: RiskReport[] }>(`/shipments/${id}`),
+  getShipment: (id: string, signal?: AbortSignal) =>
+    apiFetch<{ shipment: Shipment; risk_history: RiskReport[] }>(`/shipments/${id}`, { signal }),
 
-  getShipmentMap: () =>
-    apiFetch<ShipmentMapResponse>("/shipments/map"),
+  getShipmentMap: (signal?: AbortSignal) =>
+    apiFetch<ShipmentMapResponse>("/shipments/map", { signal }),
 
   analyze: (useMockNews = false) =>
     apiFetch<AnalysisResult>("/analyze", {
@@ -169,11 +169,11 @@ export const api = {
   analyzeMock: () =>
     apiFetch<AnalysisResult>("/analyze/mock", { method: "POST" }),
 
-  getLatestReport: () =>
-    apiFetch<AnalysisResult>("/reports/latest"),
+  getLatestReport: (signal?: AbortSignal) =>
+    apiFetch<AnalysisResult>("/reports/latest", { signal }),
 
-  getRuns: (limit = 20) =>
-    apiFetch<{ runs: AnalysisRun[] }>(`/runs?limit=${limit}`),
+  getRuns: (limit = 20, signal?: AbortSignal) =>
+    apiFetch<{ runs: AnalysisRun[] }>(`/runs?limit=${limit}`, { signal }),
 
   uploadCsv: (file: File) => {
     const fd = new FormData();

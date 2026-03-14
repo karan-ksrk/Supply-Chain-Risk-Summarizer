@@ -42,6 +42,17 @@ def delete_all_shipments(db: Session):
     db.commit()
 
 
+def delete_all_data(db: Session):
+    # Child tables must be deleted before their parent tables
+    # due to foreign key constraints in SQLite / SQLAlchemy
+    db.query(RiskReport).delete()
+    db.query(NewsSignal).delete()
+    db.query(AnalysisRun).delete()
+    db.query(Shipment).delete()
+    db.query(RouteCache).delete()
+    db.commit()
+
+
 # ── Analysis Runs ────────────────────────────────────────────
 
 def create_run(db: Session, llm_provider: str, used_mock_news: bool) -> AnalysisRun:

@@ -6,8 +6,10 @@ from contextlib import asynccontextmanager
 import io
 import csv
 import os
+import os
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -121,7 +123,8 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
     _is_running = True
     run = crud.create_run(db, llm_provider=PROVIDER, used_mock_news=req.use_mock_news)
 
-    try:
+    def _do_analyze():
+        global _local_latest_report
         shipments = _get_shipments(db)
         articles = MOCK_NEWS if req.use_mock_news else fetch_news(req.max_articles, shipments=shipments)
         signals = extract_signals(articles)
@@ -155,6 +158,10 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
         return payload
 
+    try:
+        payload = await run_in_threadpool(_do_analyze)
+        return payload
+
     except Exception as e:
         if _use_local_sample_shipments():
             _local_latest_report = None
@@ -166,7 +173,7 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/analyze/mock")
 async def analyze_mock(db: Session = Depends(get_db)):
-    return await analyze(AnalyzeRequest(use_mock_news=True), db)
+    return await analyze(AnalyzeRequest(**{"use_mock_news": True}), db)
 
 
 @app.get("/api/reports/latest")
@@ -201,12 +208,22 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     if not file.filename.endswith(".csv"):
         raise HTTPException(400, "Only CSV files accepted.")
     contents = await file.read()
-    shipments = list(csv.DictReader(io.StringIO(contents.decode("utf-8"))))
+    shipments_reader = csv.DictReader(io.StringIO(contents.decode("utf-8")))
+    shipments = list(shipments_reader)
     if not shipments:
         raise HTTPException(400, "CSV empty or malformed.")
     crud.delete_all_shipments(db)
     crud.upsert_shipments(db, shipments)
     return {"status": "ok", "count": len(shipments), "preview": shipments[:3]}
+
+
+@app.delete("/api/clear")
+async def clear_database(db: Session = Depends(get_db)):
+    """Deletes all data from the database."""
+    global _local_latest_report
+    crud.delete_all_data(db)
+    _local_latest_report = None
+    return {"status": "ok", "message": "Database cleared."}
 
 
 # ── Serializers ──────────────────────────────────────────────
