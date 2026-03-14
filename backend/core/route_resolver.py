@@ -43,6 +43,28 @@ KNOWN_LOCATIONS: dict[str, tuple[float, float]] = {
     "port said|egypt": (31.2653, 32.3019),
     "sikka port|india": (22.4295, 69.8214),
     "sikka|india": (22.4295, 69.8214),
+    "mundra port|india": (22.8399, 69.7197),
+    "mundra|india": (22.8399, 69.7197),
+    "port of corpus christi|united states": (27.8006, -97.3964),
+    "corpus christi|united states": (27.8006, -97.3964),
+    "paradip refinery terminal|india": (20.3057, 86.6703),
+    "paradip|india": (20.3057, 86.6703),
+    "primorsk oil terminal|russia": (60.3658, 28.6070),
+    "primorsk|russia": (60.3658, 28.6070),
+    "vadinar port|india": (22.4631, 69.7101),
+    "vadinar|india": (22.4631, 69.7101),
+    "port of ningbo zhoushan|china": (29.8683, 121.5440),
+    "ningbo|china": (29.8683, 121.5440),
+    "mina al ahmadi terminal|kuwait": (28.9253, 48.1785),
+    "kuwait city|kuwait": (29.3759, 47.9774),
+    "port of yokkaichi|japan": (34.9667, 136.6333),
+    "yokkaichi|japan": (34.9667, 136.6333),
+    "es sider oil terminal|libya": (30.6539, 18.3744),
+    "es sider|libya": (30.6539, 18.3744),
+    "port of taranto|italy": (40.4742, 17.2295),
+    "taranto|italy": (40.4742, 17.2295),
+    "yeosu oil terminal|south korea": (34.7392, 127.7438),
+    "yeosu|south korea": (34.7604, 127.6622),
 }
 
 
@@ -212,6 +234,26 @@ def build_map_feature(
 ) -> dict:
     route_key = _route_key(shipment)
     cached = crud.get_route_cache(db, route_key)
+
+    if cached is not None:
+        unresolved = (
+            (cached.origin_lat is None or cached.origin_lng is None or cached.dest_lat is None or cached.dest_lng is None)
+            and not (cached.normalized_coordinates or [])
+        )
+        if unresolved:
+            origin_known = _lookup_known(
+                shipment.get("origin_port"),
+                shipment.get("origin_city"),
+                shipment.get("origin_country"),
+            )
+            dest_known = _lookup_known(
+                shipment.get("dest_port"),
+                shipment.get("dest_city"),
+                shipment.get("dest_country"),
+            )
+            # Retry only when both points are now resolvable from known mapping.
+            if origin_known and dest_known:
+                cached = None
 
     if cached is not None:
         origin = {"lat": cached.origin_lat, "lng": cached.origin_lng}

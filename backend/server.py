@@ -88,10 +88,11 @@ def get_shipments(
     page_size: int = Query(20, ge=1, le=100),
     q: str | None = None,
     risk_status: str | None = None,
+    run_id: int | None = Query(None, ge=1),
     db: Session = Depends(get_db),
 ):
     normalized_status = _normalize_risk_status(risk_status)
-    reports_by_shipment = _get_latest_reports_by_shipment(db)
+    reports_by_shipment = _get_reports_by_shipment(db, run_id=run_id)
 
     if _use_local_sample_shipments():
         shipments = _filter_local_shipments(
@@ -123,10 +124,11 @@ def get_shipments_map(
     page_size: int = Query(20, ge=1, le=100),
     q: str | None = None,
     risk_status: str | None = None,
+    run_id: int | None = Query(None, ge=1),
     db: Session = Depends(get_db),
 ):
     normalized_status = _normalize_risk_status(risk_status)
-    reports_by_shipment = _get_latest_reports_by_shipment(db)
+    reports_by_shipment = _get_reports_by_shipment(db, run_id=run_id)
 
     if _use_local_sample_shipments():
         shipments = _filter_local_shipments(
@@ -610,15 +612,24 @@ def _normalize_risk_status(risk_status: str | None) -> str | None:
 
 
 def _get_latest_reports_by_shipment(db: Session) -> dict[str, dict]:
+    return _get_reports_by_shipment(db, run_id=None)
+
+
+def _get_reports_by_shipment(db: Session, run_id: int | None = None) -> dict[str, dict]:
     if _use_local_sample_shipments():
         if not _local_latest_report:
             return {}
         return {report["shipment_id"]: report for report in _local_latest_report.get("risk_reports", [])}
-    latest_runs = crud.get_runs(db, limit=1)
-    latest_run = latest_runs[0] if latest_runs else None
-    if not latest_run:
-        return {}
-    reports = crud.get_reports_for_run(db, latest_run.id)
+
+    target_run_id = run_id
+    if target_run_id is None:
+        latest_runs = crud.get_runs(db, limit=1)
+        latest_run = latest_runs[0] if latest_runs else None
+        if not latest_run:
+            return {}
+        target_run_id = latest_run.id
+
+    reports = crud.get_reports_for_run(db, target_run_id)
     return {r.shipment_id: _r(r) for r in reports}
 
 

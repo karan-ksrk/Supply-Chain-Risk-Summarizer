@@ -175,6 +175,7 @@ export interface GetShipmentsParams {
   pageSize?: number;
   q?: string;
   riskStatus?: MapRiskLevel;
+  runId?: number;
   signal?: AbortSignal;
 }
 
@@ -198,20 +199,22 @@ export const api = {
   health: (signal?: AbortSignal) =>
     apiFetch<HealthResponse>("/health", { signal }),
 
-  getShipments: ({ page = 1, pageSize = 20, q, riskStatus, signal }: GetShipmentsParams = {}) => {
+  getShipments: ({ page = 1, pageSize = 20, q, riskStatus, runId, signal }: GetShipmentsParams = {}) => {
     const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
     if (q && q.trim()) params.set("q", q.trim());
     if (riskStatus) params.set("risk_status", riskStatus);
+    if (runId) params.set("run_id", String(runId));
     return apiFetch<PaginatedShipmentsResponse>(`/shipments?${params.toString()}`, { signal });
   },
 
   getShipment: (id: string, signal?: AbortSignal) =>
     apiFetch<{ shipment: Shipment; risk_history: RiskReport[] }>(`/shipments/${id}`, { signal }),
 
-  getShipmentMap: ({ page = 1, pageSize = 20, q, riskStatus, signal }: GetShipmentsParams = {}) => {
+  getShipmentMap: ({ page = 1, pageSize = 20, q, riskStatus, runId, signal }: GetShipmentsParams = {}) => {
     const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
     if (q && q.trim()) params.set("q", q.trim());
     if (riskStatus) params.set("risk_status", riskStatus);
+    if (runId) params.set("run_id", String(runId));
     return apiFetch<ShipmentMapResponse>(`/shipments/map?${params.toString()}`, { signal });
   },
 

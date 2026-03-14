@@ -74,6 +74,25 @@ def _chunked(items: list[Any], size: int):
 
 def _enrich_report(report: dict, shipment: dict, signals: list[dict]) -> dict:
     enriched = {**report}
+    # Trust pipeline shipment identity over model output for DB consistency.
+    enriched["shipment_id"] = shipment.get("shipment_id")
+
+    risk_level = str(enriched.get("risk_level", "LOW") or "LOW").strip().upper()
+    if risk_level not in {"HIGH", "MEDIUM", "LOW"}:
+        risk_level = "LOW"
+    enriched["risk_level"] = risk_level
+
+    confidence = str(enriched.get("confidence", "LOW") or "LOW").strip().upper()
+    if confidence not in {"HIGH", "MEDIUM", "LOW"}:
+        confidence = "LOW"
+    enriched["confidence"] = confidence
+
+    delay_estimate = enriched.get("delay_estimate")
+    if delay_estimate is None:
+        enriched["delay_estimate"] = "None"
+    elif str(delay_estimate).strip().lower() == "none":
+        enriched["delay_estimate"] = "None"
+
     enriched["vendor"] = shipment.get("vendor", "")
     enriched["origin"] = f"{shipment.get('origin_city')} → {shipment.get('dest_city')}"
     enriched["route"] = shipment.get("route", "")

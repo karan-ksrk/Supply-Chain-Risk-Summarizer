@@ -322,6 +322,7 @@ export default function Dashboard() {
           page,
           pageSize: PAGE_SIZE,
           riskStatus: filter === "ALL" ? undefined : filter,
+          runId: result?.run_id,
           signal,
         });
         setShipmentPage(shipmentsData);
@@ -331,7 +332,7 @@ export default function Dashboard() {
         setError("Unable to load dashboard data.");
       }
     },
-    [filter, page, setError],
+    [filter, page, result?.run_id, setError],
   );
 
   const refreshAncillaryData = useCallback(
@@ -344,6 +345,7 @@ export default function Dashboard() {
           page,
           pageSize: PAGE_SIZE,
           riskStatus: filter === "ALL" ? undefined : filter,
+          runId: result?.run_id,
           signal,
         })
         .then((mapData) => {
@@ -372,7 +374,7 @@ export default function Dashboard() {
           if (err.name === "AbortError") return;
         });
     },
-    [filter, page, setError, setResult],
+    [filter, page, result?.run_id, setError, setResult],
   );
 
   useEffect(() => {
