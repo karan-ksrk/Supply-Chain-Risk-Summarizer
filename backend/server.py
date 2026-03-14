@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import io
 import csv
 import json
+import math
 import os
 from collections.abc import Callable
 from queue import Queue
@@ -15,14 +16,14 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.core.news_fetcher import fetch_news
-from backend.core.risk_analyzer import analyze_single_shipment_risk
+from backend.core.risk_analyzer import analyze_risks
 from backend.core.route_resolver import build_map_feature
 from backend.core.shipment_matcher import match_shipments_to_signals
-from backend.core.signal_extractor import extract_signal
+from backend.core.signal_extractor import extract_signals
 from backend.data.shipments import SAMPLE_SHIPMENTS
 from backend.db import crud
 from backend.db.database import SessionLocal, get_db, init_db
@@ -64,6 +65,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 class AnalyzeRequest(BaseModel):
     use_mock_news: bool = False
     max_articles: int = 15
+    signal_batch_size: int = Field(default=5, ge=1, le=20)
+    risk_batch_size: int = Field(default=4, ge=1, le=20)
 
 
 @app.get("/api/health")
@@ -327,6 +330,7 @@ def _run_analysis_pipeline(
     global _local_latest_report
 
     shipments = _get_shipments(db)
+    print(f"📦 Loaded {len(shipments)} shipments for analysis")
     _emit_stage(
         emit,
         stage="fetching_news",
@@ -334,43 +338,48 @@ def _run_analysis_pipeline(
         total_shipments=len(shipments),
     )
     articles = MOCK_NEWS if req.use_mock_news else fetch_news(req.max_articles, shipments=shipments)
+    print(f"📰 Retrieved {len(articles)} news articles")
 
     _emit_stage(
         emit,
         stage="extracting_signals",
         message="Extracting risk signals...",
         total_articles=len(articles),
+        batch_size=req.signal_batch_size,
     )
-    signals: list[dict] = []
-    for idx, article in enumerate(articles, start=1):
-        try:
-            signal = extract_signal(article)
-            if signal is None:
-                _emit_event(emit, {
-                    "type": "signal_skipped",
-                    "index": idx,
-                    "total": len(articles),
-                    "article_title": article.get("title", ""),
-                })
-                continue
-            signals.append(signal)
-            _emit_event(emit, {
-                "type": "signal",
-                "index": idx,
-                "total": len(articles),
-                "signal": signal,
-            })
-        except Exception as e:
+    def _on_article_processed(payload: dict):
+        if payload.get("error"):
             _emit_event(emit, {
                 "type": "signal_error",
-                "index": idx,
-                "total": len(articles),
-                "article_title": article.get("title", ""),
-                "message": str(e),
+                "index": payload.get("index"),
+                "total": payload.get("total"),
+                "article_title": payload.get("article_title", ""),
+                "message": payload.get("error", "Signal extraction failed"),
             })
+            return
+        if payload.get("relevant"):
+            _emit_event(emit, {
+                "type": "signal",
+                "index": payload.get("index"),
+                "total": payload.get("total"),
+                "signal": payload.get("signal"),
+            })
+            return
+        _emit_event(emit, {
+            "type": "signal_skipped",
+            "index": payload.get("index"),
+            "total": payload.get("total"),
+            "article_title": payload.get("article_title", ""),
+        })
+
+    signals = extract_signals(
+        articles,
+        on_article_processed=_on_article_processed,
+        batch_size=req.signal_batch_size,
+    )
 
     if not signals:
-        stats = _empty_stats(shipments, articles)
+        stats = _empty_stats(shipments, articles, signal_batch_size=req.signal_batch_size)
         crud.complete_run(db, run, stats, status="no_signals")
         payload = {
             "status": "no_signals",
@@ -386,8 +395,10 @@ def _run_analysis_pipeline(
         return payload
 
     crud.save_signals(db, run.id, signals)
+    print(f"💾 Saved {len(signals)} extracted signals")
     _emit_stage(emit, stage="matching_shipments", message="Matching shipments...", signals_extracted=len(signals))
     affected = match_shipments_to_signals([s.copy() for s in shipments], signals)
+    print(f"🔗 Matched {len(affected)} affected shipments")
     _emit_event(emit, {
         "type": "matched_shipments",
         "affected_shipments": len(affected),
@@ -395,7 +406,10 @@ def _run_analysis_pipeline(
     })
 
     if not affected:
-        stats = {**_empty_stats(shipments, articles), "signals_extracted": len(signals)}
+        stats = {
+            **_empty_stats(shipments, articles, signal_batch_size=req.signal_batch_size),
+            "signals_extracted": len(signals),
+        }
         crud.complete_run(db, run, stats, status="no_affected")
         payload = {
             "status": "no_affected",
@@ -415,33 +429,57 @@ def _run_analysis_pipeline(
         stage="analyzing_shipments",
         message="Running LLM analysis...",
         total_affected=len(affected),
+        batch_size=req.risk_batch_size,
     )
-    risk_reports: list[dict] = []
-    for idx, shipment in enumerate(affected, start=1):
-        try:
-            report = analyze_single_shipment_risk(shipment)
-            risk_reports.append(report)
-            _emit_event(emit, {
-                "type": "risk_report",
-                "index": idx,
-                "total": len(affected),
-                "report": report,
-            })
-        except Exception as e:
+    print(f"🤖 Running batched LLM analysis for {len(affected)} affected shipments...")
+
+    def _on_report_started(payload: dict):
+        _emit_event(emit, {
+            "type": "risk_report_started",
+            "index": payload.get("index"),
+            "total": payload.get("total"),
+            "shipment_id": payload.get("shipment_id"),
+        })
+
+    def _on_report_processed(payload: dict):
+        if payload.get("error"):
             _emit_event(emit, {
                 "type": "risk_report_error",
-                "index": idx,
-                "total": len(affected),
-                "shipment_id": shipment.get("shipment_id"),
-                "message": str(e),
+                "index": payload.get("index"),
+                "total": payload.get("total"),
+                "shipment_id": payload.get("shipment_id"),
+                "message": payload.get("error", "Risk analysis failed"),
             })
+            return
+        _emit_event(emit, {
+            "type": "risk_report",
+            "index": payload.get("index"),
+            "total": payload.get("total"),
+            "report": payload.get("report"),
+        })
+
+    risk_reports = analyze_risks(
+        affected,
+        on_report_started=_on_report_started,
+        on_report_processed=_on_report_processed,
+        batch_size=req.risk_batch_size,
+    )
 
     if not _use_local_sample_shipments():
         crud.save_risk_reports(db, run.id, risk_reports)
+        print(f"💾 Saved {len(risk_reports)} risk reports")
 
     _emit_stage(emit, stage="finalizing", message="Finalizing report...")
-    stats = _build_stats(risk_reports, shipments, articles, signals)
+    stats = _build_stats(
+        risk_reports,
+        shipments,
+        articles,
+        signals,
+        signal_batch_size=req.signal_batch_size,
+        risk_batch_size=req.risk_batch_size,
+    )
     crud.complete_run(db, run, stats)
+    print(f"✅ Analysis run {run.id} completed with status=success")
     payload = {
         "status": "success",
         "run_id": run.id,
@@ -609,12 +647,23 @@ def _sig(s) -> dict:
     return {"source_title": s.source_title, "source": s.source_name, "published_at": s.published_at, "risk_type": s.risk_type, "severity": s.severity, "summary": s.summary, "affected_ports": s.affected_ports, "affected_cities": s.affected_cities, "affected_routes": s.affected_routes, "affected_carriers": s.affected_carriers}
 
 
-def _build_stats(reports, shipments, articles, signals) -> dict:
+def _build_stats(
+    reports,
+    shipments,
+    articles,
+    signals,
+    *,
+    signal_batch_size: int = 1,
+    risk_batch_size: int = 1,
+) -> dict:
     high = sum(1 for r in reports if r.get("risk_level") == "HIGH")
     med = sum(1 for r in reports if r.get("risk_level") == "MEDIUM")
-    used = len(articles) + len(reports)
+    signal_calls = math.ceil(len(articles) / max(1, signal_batch_size))
+    risk_calls = math.ceil(len(reports) / max(1, risk_batch_size))
+    used = signal_calls + risk_calls
     return {"total_shipments": len(shipments), "articles_fetched": len(articles), "signals_extracted": len(signals), "affected_shipments": len(reports), "high_risk": high, "medium_risk": med, "low_risk": len(reports)-high-med, "llm_calls_used": used, "llm_calls_saved": max(0, len(shipments)*len(articles)-used)}
 
 
-def _empty_stats(shipments, articles) -> dict:
-    return {"total_shipments": len(shipments), "articles_fetched": len(articles), "signals_extracted": 0, "affected_shipments": 0, "high_risk": 0, "medium_risk": 0, "low_risk": 0, "llm_calls_used": len(articles), "llm_calls_saved": 0}
+def _empty_stats(shipments, articles, *, signal_batch_size: int = 1) -> dict:
+    signal_calls = math.ceil(len(articles) / max(1, signal_batch_size))
+    return {"total_shipments": len(shipments), "articles_fetched": len(articles), "signals_extracted": 0, "affected_shipments": 0, "high_risk": 0, "medium_risk": 0, "low_risk": 0, "llm_calls_used": signal_calls, "llm_calls_saved": 0}

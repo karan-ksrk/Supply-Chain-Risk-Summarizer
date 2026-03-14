@@ -7,6 +7,7 @@ Swap providers by changing LLM_PROVIDER in your .env file.
 
 import os
 import json
+from typing import Any
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -119,7 +120,7 @@ def _call_bedrock(prompt: str, system: str) -> str:
 
 # ── Helper: safely parse JSON from LLM response ─────────────
 
-def parse_json_response(raw: str) -> dict:
+def parse_json_response(raw: str) -> Any:
     """Strips markdown code fences and parses JSON from LLM output."""
     cleaned = raw.strip()
     if cleaned.startswith("```"):
