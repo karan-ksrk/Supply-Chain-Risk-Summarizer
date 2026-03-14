@@ -125,6 +125,42 @@ export function RiskBar({ level, count, total }: { level: RiskLevel; count: numb
   );
 }
 
+
+export function PaginationControls({
+  page, totalPages, totalItems, pageSize, onPageChange,
+}: {
+  page: number; totalPages: number; totalItems: number; pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+
+  const start = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, totalItems);
+
+  return (
+    <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-border">
+      <span className="text-[11px] text-muted">Showing {start}-{end} of {totalItems}</span>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+          className="px-3 py-1.5 rounded-lg text-[11px] border border-border text-subtle hover:text-primary disabled:opacity-40 disabled:pointer-events-none"
+        >
+          Prev
+        </button>
+        <span className="text-[11px] text-muted">Page {page} / {totalPages}</span>
+        <button
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+          className="px-3 py-1.5 rounded-lg text-[11px] border border-border text-subtle hover:text-primary disabled:opacity-40 disabled:pointer-events-none"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Alert banner ──────────────────────────────────────────────────────────────
 export function Alert({ message, onClose }: { message: string; onClose?: () => void }) {
   return (

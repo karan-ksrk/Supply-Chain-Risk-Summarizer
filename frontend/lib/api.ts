@@ -90,6 +90,22 @@ export interface ShipmentMapResponse {
   count: number;
 }
 
+export interface ShipmentSummary {
+  total: number;
+  sea: number;
+  air: number;
+}
+
+export interface PaginatedShipmentsResponse {
+  shipments: Shipment[];
+  count: number;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  summary: ShipmentSummary;
+}
+
 export interface PipelineStats {
   total_shipments: number;
   articles_fetched: number;
@@ -131,6 +147,14 @@ export interface HealthResponse {
   last_run: string | null;
 }
 
+export interface GetShipmentsParams {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+  riskStatus?: MapRiskLevel;
+  signal?: AbortSignal;
+}
+
 // ── Fetch helper ─────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string, options?: RequestInit & { signal?: AbortSignal }): Promise<T> {
@@ -151,8 +175,12 @@ export const api = {
   health: (signal?: AbortSignal) =>
     apiFetch<HealthResponse>("/health", { signal }),
 
-  getShipments: (signal?: AbortSignal) =>
-    apiFetch<{ shipments: Shipment[]; count: number }>("/shipments", { signal }),
+  getShipments: ({ page = 1, pageSize = 20, q, riskStatus, signal }: GetShipmentsParams = {}) => {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (q && q.trim()) params.set("q", q.trim());
+    if (riskStatus) params.set("risk_status", riskStatus);
+    return apiFetch<PaginatedShipmentsResponse>(`/shipments?${params.toString()}`, { signal });
+  },
 
   getShipment: (id: string, signal?: AbortSignal) =>
     apiFetch<{ shipment: Shipment; risk_history: RiskReport[] }>(`/shipments/${id}`, { signal }),

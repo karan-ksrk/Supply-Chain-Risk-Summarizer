@@ -7,13 +7,14 @@ import {
   api,
   type AnalysisResult,
   type MapRiskLevel,
+  type PaginatedShipmentsResponse,
   type NewsSignal,
   type RiskReport,
   type Shipment,
   type ShipmentMapFeature,
 } from "@/lib/api";
 import { cn, formatDateTime, getRiskConfig } from "@/lib/utils";
-import { Alert, Button, Card, CardHeader, Empty, RiskBadge, RiskBar, Spinner, StatCard } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, Empty, PaginationControls, RiskBadge, RiskBar, Spinner, StatCard } from "@/components/ui";
 import { useAnalysisStore } from "@/lib/store";
 
 const ShipmentMap = dynamic(() => import("@/components/shipment-map"), {
@@ -62,6 +63,16 @@ type DrawerSelection = {
 
 const TABS: DashboardTab[] = ["shipments", "map", "signals"];
 const FILTERS: RiskFilter[] = ["ALL", "HIGH", "MEDIUM", "LOW", "PENDING"];
+const PAGE_SIZE = 20;
+const EMPTY_SHIPMENT_PAGE: PaginatedShipmentsResponse = {
+  shipments: [],
+  count: 0,
+  total: 0,
+  page: 1,
+  page_size: PAGE_SIZE,
+  total_pages: 0,
+  summary: { total: 0, sea: 0, air: 0 },
+};
 
 function toDrawerSelection(row: DashboardRow): DrawerSelection {
   return {
@@ -186,7 +197,7 @@ function DetailDrawer({ item, onClose }: { item: DrawerSelection; onClose: () =>
 }
 
 export default function Dashboard() {
-  const [shipments, setShipments] = useState<Shipment[]>([]);
+  const [shipmentPage, setShipmentPage] = useState<PaginatedShipmentsResponse>(EMPTY_SHIPMENT_PAGE);
   const [mapShipments, setMapShipments] = useState<ShipmentMapFeature[]>([]);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [selected, setSelected] = useState<DrawerSelection | null>(null);
@@ -195,40 +206,62 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<RiskFilter>("ALL");
   const [tab, setTab] = useState<DashboardTab>("shipments");
   const [uploading, setUploading] = useState(false);
+  const [page, setPage] = useState(1);
 
-  const refreshData = useCallback(async (signal?: AbortSignal) => {
+  const loadShipmentPage = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [shipmentsData, mapData] = await Promise.all([
-        api.getShipments(signal),
-        api.getShipmentMap(signal),
-      ]);
-      setShipments(shipmentsData.shipments);
-      setMapShipments(mapData.shipments);
-
-      let latest = null;
-      try {
-        latest = await api.getLatestReport(signal);
-      } catch (e: any) {
-        if (e.name === "AbortError") throw e;
-        // 404 just means no run yet, ignore
-      }
-      setResult(latest);
+      const shipmentsData = await api.getShipments({
+        page,
+        pageSize: PAGE_SIZE,
+        riskStatus: filter === "ALL" ? undefined : filter,
+        signal,
+      });
+      setShipmentPage(shipmentsData);
     } catch (err: any) {
       if (err.name === "AbortError") return;
-      setResult(null);
+      setShipmentPage(EMPTY_SHIPMENT_PAGE);
       setError("Unable to load dashboard data.");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [filter, page, setError]);
+
+  const refreshAncillaryData = useCallback((signal?: AbortSignal) => {
+    setError("");
+
+    api.getShipmentMap(signal)
+      .then((mapData) => {
+        setMapShipments(mapData.shipments);
+      })
+      .catch((err: any) => {
+        if (err.name === "AbortError") return;
+        setMapShipments([]);
+        setError("Dashboard map could not load. Shipment data is still available.");
+      });
+
+    api.getLatestReport(signal)
+      .then((latest) => {
+        setResult(latest);
+      })
+      .catch((err: any) => {
+        if (err.name === "AbortError") return;
+        setResult(null);
+      });
+  }, [setError]);
 
   useEffect(() => {
     const abortController = new AbortController();
-    refreshData(abortController.signal);
+    refreshAncillaryData(abortController.signal);
     return () => {
       abortController.abort();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshAncillaryData]);
+
+  useEffect(() => {
+    const abortController = new AbortController();
+    loadShipmentPage(abortController.signal);
+    return () => {
+      abortController.abort();
+    };
+  }, [loadShipmentPage]);
 
   useEffect(() => {
     if (!loading) {
@@ -247,7 +280,8 @@ export default function Dashboard() {
       const data = mock ? await api.analyzeMock() : await api.analyze(false);
       if ("detail" in (data as any)) throw new Error((data as any).detail);
       setResult(data);
-      await refreshData();
+      refreshAncillaryData();
+      await loadShipmentPage();
     } catch (e: any) {
       if (e.name !== 'AbortError') {
         setError(e.message || "Analysis failed. Is the FastAPI server running on :8000?");
@@ -255,7 +289,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [refreshData, setLoading, setError]);
+  }, [loadShipmentPage, refreshAncillaryData, setLoading, setError]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -266,15 +300,19 @@ export default function Dashboard() {
     if (res.status === "ok") {
       setResult(null);
       setSelected(null);
-      await refreshData();
+      setPage(1);
+      refreshAncillaryData();
     } else {
       setError(res.detail || "Upload failed");
     }
     e.target.value = "";
   };
 
+  const shipments = shipmentPage.shipments;
+  const totalShipments = result?.stats?.total_shipments ?? shipmentPage.total;
+
   const enriched = shipments.map((shipment) => {
-    const report = result?.risk_reports.find((r) => r.shipment_id === shipment.shipment_id);
+    const report = result?.risk_reports?.find((r) => r.shipment_id === shipment.shipment_id);
     return {
       ...shipment,
       ...(report ?? {}),
@@ -286,7 +324,7 @@ export default function Dashboard() {
   const filteredMap = filter === "ALL" ? mapShipments : mapShipments.filter((shipment) => shipment.status === filter);
   const stats = result?.stats;
   const signals = result?.signals ?? [];
-  const pendingCount = shipments.length - (stats?.affected_shipments ?? result?.risk_reports.length ?? 0);
+  const pendingCount = totalShipments - (stats?.affected_shipments ?? result?.risk_reports.length ?? 0);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
@@ -357,7 +395,7 @@ export default function Dashboard() {
                   return (
                     <button
                       key={value}
-                      onClick={() => setFilter(value)}
+                      onClick={() => { setFilter(value); setPage(1); }}
                       className={cn(
                         "px-3 py-1 rounded-full text-[10px] tracking-widest border transition-all",
                         filter === value
@@ -379,7 +417,7 @@ export default function Dashboard() {
                 <span>ID</span><span>Vendor</span><span>Route</span><span>ETA</span><span>Status</span><span>Delay</span>
               </div>
               {filteredRows.length === 0 ? (
-                <Empty message={shipments.length === 0 ? "No shipments loaded" : "No shipments match filter"} />
+                <Empty message={shipmentPage.total === 0 ? "No shipments loaded" : "No shipments match filter"} />
               ) : (
                 filteredRows.map((shipment) => {
                   const isSel = selected?.shipment_id === shipment.shipment_id;
@@ -404,6 +442,13 @@ export default function Dashboard() {
                   );
                 })
               )}
+              <PaginationControls
+                page={shipmentPage.page}
+                totalPages={shipmentPage.total_pages}
+                totalItems={shipmentPage.total}
+                pageSize={shipmentPage.page_size}
+                onPageChange={setPage}
+              />
             </Card>
           )}
 
@@ -480,12 +525,12 @@ export default function Dashboard() {
           <Card>
             <CardHeader title="Risk Breakdown" right={`${result?.risk_reports.length ?? 0} affected`} />
             <div className="p-4">
-              {shipments.length > 0 ? (
+              {totalShipments > 0 ? (
                 <>
-                  <RiskBar level="HIGH" count={stats?.high_risk ?? 0} total={shipments.length} />
-                  <RiskBar level="MEDIUM" count={stats?.medium_risk ?? 0} total={shipments.length} />
-                  <RiskBar level="LOW" count={stats?.low_risk ?? 0} total={shipments.length} />
-                  <RiskBar level="PENDING" count={Math.max(0, pendingCount)} total={shipments.length} />
+                  <RiskBar level="HIGH" count={stats?.high_risk ?? 0} total={totalShipments} />
+                  <RiskBar level="MEDIUM" count={stats?.medium_risk ?? 0} total={totalShipments} />
+                  <RiskBar level="LOW" count={stats?.low_risk ?? 0} total={totalShipments} />
+                  <RiskBar level="PENDING" count={Math.max(0, pendingCount)} total={totalShipments} />
                 </>
               ) : (
                 <Empty message="Load shipments to see breakdown" />

@@ -24,12 +24,15 @@ export const analysisStore = {
   }
 };
 
+const setLoading = (loading: boolean) => analysisStore.setState({ loading });
+const setError = (error: string) => analysisStore.setState({ error });
+
 export function useAnalysisStore() {
   const storeState = useSyncExternalStore(analysisStore.subscribe, analysisStore.getState, analysisStore.getState);
-  
+
   return {
     ...storeState,
-    setLoading: (loading: boolean) => analysisStore.setState({ loading }),
-    setError: (error: string) => analysisStore.setState({ error }),
+    setLoading,
+    setError,
   };
 }

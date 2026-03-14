@@ -1,13 +1,6 @@
-"""
-backend/db/crud.py
-------------------
-All database read/write operations.
-Keeps DB logic out of server.py (clean separation).
-"""
-
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 
 from backend.db.models import Shipment, AnalysisRun, NewsSignal, RiskReport, RouteCache
 
@@ -29,8 +22,58 @@ def upsert_shipments(db: Session, shipments: list[dict]) -> int:
     return len(shipments)
 
 
+def _apply_shipment_search(query, search: str | None):
+    term = (search or "").strip()
+    if not term:
+        return query
+    like = f"%{term}%"
+    return query.filter(or_(
+        Shipment.shipment_id.ilike(like),
+        Shipment.vendor.ilike(like),
+        Shipment.origin_city.ilike(like),
+        Shipment.dest_city.ilike(like),
+        Shipment.origin_port.ilike(like),
+        Shipment.dest_port.ilike(like),
+        Shipment.carrier.ilike(like),
+    ))
+
+
 def get_all_shipments(db: Session) -> list[Shipment]:
     return db.query(Shipment).order_by(Shipment.shipment_id).all()
+
+
+def get_shipments_page(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    search: str | None = None,
+    shipment_ids: list[str] | None = None,
+    exclude_ids: list[str] | None = None,
+) -> tuple[list[Shipment], int, dict]:
+    query = _apply_shipment_search(db.query(Shipment), search)
+
+    if shipment_ids is not None:
+        if not shipment_ids:
+            return [], 0, {"total": 0, "sea": 0, "air": 0}
+        query = query.filter(Shipment.shipment_id.in_(shipment_ids))
+
+    if exclude_ids:
+        query = query.filter(~Shipment.shipment_id.in_(exclude_ids))
+
+    total = query.count()
+    summary = {
+        "total": total,
+        "sea": query.filter(Shipment.transport_mode == "Sea").count(),
+        "air": query.filter(Shipment.transport_mode == "Air").count(),
+    }
+    items = (
+        query.order_by(Shipment.shipment_id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return items, total, summary
 
 
 def get_shipment(db: Session, shipment_id: str) -> Shipment | None:

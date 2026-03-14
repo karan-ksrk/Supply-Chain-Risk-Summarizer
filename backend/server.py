@@ -7,7 +7,7 @@ import io
 import csv
 import os
 import os
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -75,22 +75,44 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.get("/api/shipments")
-def get_shipments(db: Session = Depends(get_db)):
-    shipments = _get_shipments(db)
-    return {"shipments": shipments, "count": len(shipments)}
+def get_shipments(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    q: str | None = None,
+    risk_status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    normalized_status = _normalize_risk_status(risk_status)
+    reports_by_shipment = _get_latest_reports_by_shipment(db)
+
+    if _use_local_sample_shipments():
+        shipments = _filter_local_shipments(
+            [s.copy() for s in SAMPLE_SHIPMENTS],
+            q=q,
+            risk_status=normalized_status,
+            reports_by_shipment=reports_by_shipment,
+        )
+        total = len(shipments)
+        summary = _summarize_shipments(shipments)
+        paged = shipments[(page - 1) * page_size: page * page_size]
+        return _shipment_page_response(paged, total, page, page_size, summary)
+
+    shipment_ids, exclude_ids = _shipment_filters_from_status(normalized_status, reports_by_shipment)
+    shipments, total, summary = crud.get_shipments_page(
+        db,
+        page=page,
+        page_size=page_size,
+        search=q,
+        shipment_ids=shipment_ids,
+        exclude_ids=exclude_ids,
+    )
+    return _shipment_page_response([_s(s) for s in shipments], total, page, page_size, summary)
 
 
 @app.get("/api/shipments/map")
 def get_shipments_map(db: Session = Depends(get_db)):
     shipments = _get_shipments(db)
-    if _use_local_sample_shipments() and _local_latest_report:
-        reports_by_shipment = {
-            report["shipment_id"]: report
-            for report in _local_latest_report.get("risk_reports", [])
-        }
-    else:
-        reports = crud.get_latest_reports(db)
-        reports_by_shipment = {r.shipment_id: _r(r) for r in reports}
+    reports_by_shipment = _get_latest_reports_by_shipment(db)
     features = [build_map_feature(db, shipment, reports_by_shipment.get(shipment.get("shipment_id"))) for shipment in shipments]
     return {"shipments": features, "count": len(features)}
 
@@ -209,7 +231,10 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         raise HTTPException(400, "Only CSV files accepted.")
     contents = await file.read()
     shipments_reader = csv.DictReader(io.StringIO(contents.decode("utf-8")))
-    shipments = list(shipments_reader)
+    shipments = []
+    for row in shipments_reader:
+        cleaned_row = {k: (v if v != "" else None) for k, v in row.items()}
+        shipments.append(cleaned_row)
     if not shipments:
         raise HTTPException(400, "CSV empty or malformed.")
     crud.delete_all_shipments(db)
@@ -250,6 +275,98 @@ def _get_shipment(db: Session, shipment_id: str) -> dict | None:
         return None
     shipment = crud.get_shipment(db, shipment_id)
     return _s(shipment) if shipment else None
+
+
+def _normalize_risk_status(risk_status: str | None) -> str | None:
+    if not risk_status:
+        return None
+    normalized = risk_status.strip().upper()
+    if normalized not in {"HIGH", "MEDIUM", "LOW", "PENDING"}:
+        raise HTTPException(400, "Invalid risk_status. Use HIGH, MEDIUM, LOW, or PENDING.")
+    return normalized
+
+
+def _get_latest_reports_by_shipment(db: Session) -> dict[str, dict]:
+    if _use_local_sample_shipments():
+        if not _local_latest_report:
+            return {}
+        return {report["shipment_id"]: report for report in _local_latest_report.get("risk_reports", [])}
+    reports = crud.get_latest_reports(db)
+    return {r.shipment_id: _r(r) for r in reports}
+
+
+def _matches_search(shipment: dict, query: str | None) -> bool:
+    term = (query or "").strip().lower()
+    if not term:
+        return True
+    haystacks = [
+        shipment.get("shipment_id"),
+        shipment.get("vendor"),
+        shipment.get("origin_city"),
+        shipment.get("dest_city"),
+        shipment.get("origin_port"),
+        shipment.get("dest_port"),
+        shipment.get("carrier"),
+    ]
+    return any(term in str(value or "").lower() for value in haystacks)
+
+
+def _matches_risk_status(shipment: dict, risk_status: str | None, reports_by_shipment: dict[str, dict]) -> bool:
+    if not risk_status:
+        return True
+    report = reports_by_shipment.get(shipment.get("shipment_id"))
+    if risk_status == "PENDING":
+        return report is None
+    return bool(report and report.get("risk_level") == risk_status)
+
+
+def _filter_local_shipments(
+    shipments: list[dict],
+    *,
+    q: str | None,
+    risk_status: str | None,
+    reports_by_shipment: dict[str, dict],
+) -> list[dict]:
+    filtered = []
+    for shipment in shipments:
+        if not _matches_search(shipment, q):
+            continue
+        if not _matches_risk_status(shipment, risk_status, reports_by_shipment):
+            continue
+        filtered.append(shipment)
+    filtered.sort(key=lambda shipment: shipment.get("shipment_id") or "")
+    return filtered
+
+
+def _summarize_shipments(shipments: list[dict]) -> dict:
+    return {
+        "total": len(shipments),
+        "sea": sum(1 for shipment in shipments if shipment.get("transport_mode") == "Sea"),
+        "air": sum(1 for shipment in shipments if shipment.get("transport_mode") == "Air"),
+    }
+
+
+def _shipment_filters_from_status(risk_status: str | None, reports_by_shipment: dict[str, dict]) -> tuple[list[str] | None, list[str] | None]:
+    if not risk_status:
+        return None, None
+    report_ids = list(reports_by_shipment.keys())
+    if risk_status == "PENDING":
+        return None, report_ids
+    matching = [shipment_id for shipment_id, report in reports_by_shipment.items() if report.get("risk_level") == risk_status]
+    return matching, None
+
+
+def _shipment_page_response(shipments: list[dict], total: int, page: int, page_size: int, summary: dict) -> dict:
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return {
+        "shipments": shipments,
+        "count": len(shipments),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "summary": summary,
+    }
 
 
 def _r(r) -> dict:
