@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type PaginatedShipmentsResponse, type RiskReport, type Shipment } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatEtaForTable } from "@/lib/utils";
 import { RiskBadge, Card, Spinner, Empty, Alert, PaginationControls } from "@/components/ui";
 
 const PAGE_SIZE = 20;
@@ -125,7 +125,7 @@ export default function ShipmentsPage() {
       <Card>
         <div className="grid grid-cols-[100px_1fr_1fr_1fr_80px_100px_110px_100px] gap-4 px-5 py-2.5 border-b border-border text-[9px] text-muted uppercase tracking-widest">
           <span>ID</span><span>Vendor</span><span>Origin</span><span>Destination</span>
-          <span>Mode</span><span>ETA</span><span>Risk Status</span><span>Delay</span>
+          <span>Mode</span><span>ETA</span><span className="pl-2">Risk Status</span><span>Delay</span>
         </div>
         {loading ? (
           <div className="py-12 flex justify-center"><Spinner size={20} /></div>
@@ -155,8 +155,8 @@ export default function ShipmentsPage() {
                     : "text-blue-400 bg-blue-500/10 border-blue-500/40"
                 )}>{shipment.transport_mode}</span>
               </span>
-              <span className="text-subtle text-[12px]">{shipment.eta?.slice(5) ?? "—"}</span>
-              <span>{report ? <RiskBadge level={report.risk_level} /> : <span className="text-muted text-[10px]">Pending</span>}</span>
+              <span className="text-subtle text-[12px]">{formatEtaForTable(shipment.eta)}</span>
+              <span className="pl-2">{report ? <RiskBadge level={report.risk_level} /> : <span className="text-muted text-[10px]">Pending</span>}</span>
               <span className={cn("text-[12px]",
                 report?.delay_estimate && report.delay_estimate !== "None"
                   ? "text-red-400" : "text-emerald-400"

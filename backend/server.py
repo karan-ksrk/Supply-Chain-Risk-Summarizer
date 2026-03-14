@@ -137,10 +137,16 @@ def get_shipments_map(
         )
         total = len(shipments)
         paged = shipments[(page - 1) * page_size: page * page_size]
-        features = [
-            build_map_feature(db, shipment, reports_by_shipment.get(shipment.get("shipment_id")))
-            for shipment in paged
-        ]
+        features = []
+        for shipment in paged:
+            feature = build_map_feature(
+                db,
+                shipment,
+                reports_by_shipment.get(shipment.get("shipment_id")),
+                auto_commit=False,
+            )
+            features.append(feature)
+        db.commit()
         return _map_page_response(features, total, page, page_size)
 
     shipment_ids, exclude_ids = _shipment_filters_from_status(normalized_status, reports_by_shipment)
@@ -152,10 +158,16 @@ def get_shipments_map(
         shipment_ids=shipment_ids,
         exclude_ids=exclude_ids,
     )
-    features = [
-        build_map_feature(db, _s(shipment), reports_by_shipment.get(shipment.shipment_id))
-        for shipment in shipments
-    ]
+    features = []
+    for shipment in shipments:
+        feature = build_map_feature(
+            db,
+            _s(shipment),
+            reports_by_shipment.get(shipment.shipment_id),
+            auto_commit=False,
+        )
+        features.append(feature)
+    db.commit()
     return _map_page_response(features, total, page, page_size)
 
 
@@ -275,17 +287,37 @@ def latest_report(db: Session = Depends(get_db)):
             raise HTTPException(404, "No report yet.")
         return _local_latest_report
 
-    run = crud.get_latest_run(db)
+    latest_runs = crud.get_runs(db, limit=1)
+    run = latest_runs[0] if latest_runs else None
     if not run:
         raise HTTPException(404, "No report yet.")
     reports = crud.get_reports_for_run(db, run.id)
     signals = crud.get_signals_for_run(db, run.id)
+    high = sum(1 for report in reports if getattr(report, "risk_level", None) == "HIGH")
+    medium = sum(1 for report in reports if getattr(report, "risk_level", None) == "MEDIUM")
+    low = max(0, len(reports) - high - medium)
+
+    shipments_checked = run.shipments_checked or len(_get_shipments(db))
+    signals_extracted = max(run.signals_extracted or 0, len(signals))
+    affected_shipments = max(run.affected_shipments or 0, len(reports))
+
     return {
+        "status": run.status,
         "run_id": run.id,
         "generated_at": run.run_at.isoformat(),
         "risk_reports": [_r(r) for r in reports],
         "signals": [_sig(s) for s in signals],
-        "stats": {"total_shipments": run.shipments_checked, "articles_fetched": run.articles_fetched, "signals_extracted": run.signals_extracted, "affected_shipments": run.affected_shipments, "high_risk": run.high_risk, "medium_risk": run.medium_risk, "low_risk": run.low_risk, "llm_calls_used": run.llm_calls_used, "llm_calls_saved": run.llm_calls_saved},
+        "stats": {
+            "total_shipments": shipments_checked,
+            "articles_fetched": run.articles_fetched or 0,
+            "signals_extracted": signals_extracted,
+            "affected_shipments": affected_shipments,
+            "high_risk": max(run.high_risk or 0, high),
+            "medium_risk": max(run.medium_risk or 0, medium),
+            "low_risk": max(run.low_risk or 0, low),
+            "llm_calls_used": run.llm_calls_used or 0,
+            "llm_calls_saved": run.llm_calls_saved or 0,
+        },
     }
 
 
@@ -339,6 +371,12 @@ def _run_analysis_pipeline(
     )
     articles = MOCK_NEWS if req.use_mock_news else fetch_news(req.max_articles, shipments=shipments)
     print(f"📰 Retrieved {len(articles)} news articles")
+    _update_run_progress(
+        db,
+        run,
+        shipments_checked=len(shipments),
+        articles_fetched=len(articles),
+    )
 
     _emit_stage(
         emit,
@@ -347,6 +385,7 @@ def _run_analysis_pipeline(
         total_articles=len(articles),
         batch_size=req.signal_batch_size,
     )
+
     def _on_article_processed(payload: dict):
         if payload.get("error"):
             _emit_event(emit, {
@@ -377,6 +416,7 @@ def _run_analysis_pipeline(
         on_article_processed=_on_article_processed,
         batch_size=req.signal_batch_size,
     )
+    _update_run_progress(db, run, signals_extracted=len(signals))
 
     if not signals:
         stats = _empty_stats(shipments, articles, signal_batch_size=req.signal_batch_size)
@@ -399,6 +439,7 @@ def _run_analysis_pipeline(
     _emit_stage(emit, stage="matching_shipments", message="Matching shipments...", signals_extracted=len(signals))
     affected = match_shipments_to_signals([s.copy() for s in shipments], signals)
     print(f"🔗 Matched {len(affected)} affected shipments")
+    _update_run_progress(db, run, affected_shipments=len(affected))
     _emit_event(emit, {
         "type": "matched_shipments",
         "affected_shipments": len(affected),
@@ -451,11 +492,25 @@ def _run_analysis_pipeline(
                 "message": payload.get("error", "Risk analysis failed"),
             })
             return
+        report = payload.get("report")
+        if report and not _use_local_sample_shipments():
+            crud.save_risk_reports(db, run.id, [report])
+
+            progress_high = 1 if report.get("risk_level") == "HIGH" else 0
+            progress_medium = 1 if report.get("risk_level") == "MEDIUM" else 0
+            progress_low = 1 if report.get("risk_level") == "LOW" else 0
+            _update_run_progress(
+                db,
+                run,
+                high_risk=(run.high_risk or 0) + progress_high,
+                medium_risk=(run.medium_risk or 0) + progress_medium,
+                low_risk=(run.low_risk or 0) + progress_low,
+            )
         _emit_event(emit, {
             "type": "risk_report",
             "index": payload.get("index"),
             "total": payload.get("total"),
-            "report": payload.get("report"),
+            "report": report,
         })
 
     risk_reports = analyze_risks(
@@ -466,8 +521,7 @@ def _run_analysis_pipeline(
     )
 
     if not _use_local_sample_shipments():
-        crud.save_risk_reports(db, run.id, risk_reports)
-        print(f"💾 Saved {len(risk_reports)} risk reports")
+        print(f"💾 Saved {len(risk_reports)} risk reports incrementally")
 
     _emit_stage(emit, stage="finalizing", message="Finalizing report...")
     stats = _build_stats(
@@ -506,6 +560,18 @@ def _emit_stage(
 def _emit_event(emit: Callable[[dict], None] | None, event: dict):
     if emit:
         emit(event)
+
+
+def _update_run_progress(db: Session, run, **fields):
+    dirty = False
+    for key, value in fields.items():
+        if value is None or not hasattr(run, key):
+            continue
+        setattr(run, key, value)
+        dirty = True
+    if dirty:
+        db.commit()
+        db.refresh(run)
 
 
 # ── Serializers ──────────────────────────────────────────────
@@ -548,7 +614,11 @@ def _get_latest_reports_by_shipment(db: Session) -> dict[str, dict]:
         if not _local_latest_report:
             return {}
         return {report["shipment_id"]: report for report in _local_latest_report.get("risk_reports", [])}
-    reports = crud.get_latest_reports(db)
+    latest_runs = crud.get_runs(db, limit=1)
+    latest_run = latest_runs[0] if latest_runs else None
+    if not latest_run:
+        return {}
+    reports = crud.get_reports_for_run(db, latest_run.id)
     return {r.shipment_id: _r(r) for r in reports}
 
 

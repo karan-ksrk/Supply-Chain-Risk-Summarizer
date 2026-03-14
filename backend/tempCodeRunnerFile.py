@@ -1,1 +1,1 @@
-@app.post("/api/analyze")
+/shipments

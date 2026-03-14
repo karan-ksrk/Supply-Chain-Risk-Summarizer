@@ -27,6 +27,26 @@ export function formatDateTime(iso?: string | null) {
   });
 }
 
+export function formatEtaForTable(eta?: string | null) {
+  if (!eta) return "—";
+  const raw = String(eta).trim();
+  if (!raw) return "—";
+
+  const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+  if (ymd) {
+    const [, year, month, day, hh, mm] = ymd;
+    return `${day}-${month}-${year}${hh && mm ? ` ${hh}:${mm}` : ""}`;
+  }
+
+  const dmy = raw.match(/^(\d{2})-(\d{2})-(\d{4})(?:[ T](\d{2}):(\d{2}))?/);
+  if (dmy) {
+    const [, day, month, year, hh, mm] = dmy;
+    return `${day}-${month}-${year}${hh && mm ? ` ${hh}:${mm}` : ""}`;
+  }
+
+  return raw;
+}
+
 export function cn(...classes: (string | undefined | false | null)[]) {
   return classes.filter(Boolean).join(" ");
 }

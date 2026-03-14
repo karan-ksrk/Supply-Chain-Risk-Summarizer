@@ -14,7 +14,12 @@ import {
   type Shipment,
   type ShipmentMapFeature,
 } from "@/lib/api";
-import { cn, formatDateTime, getRiskConfig } from "@/lib/utils";
+import {
+  cn,
+  formatDateTime,
+  formatEtaForTable,
+  getRiskConfig,
+} from "@/lib/utils";
 import {
   Alert,
   Button,
@@ -93,7 +98,7 @@ type DrawerSelection = {
 
 const TABS: DashboardTab[] = ["shipments", "map", "signals"];
 const FILTERS: RiskFilter[] = ["ALL", "HIGH", "MEDIUM", "LOW", "PENDING"];
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 15;
 const EMPTY_SHIPMENT_PAGE: PaginatedShipmentsResponse = {
   shipments: [],
   count: 0,
@@ -299,10 +304,11 @@ export default function Dashboard() {
   const [shipmentPage, setShipmentPage] =
     useState<PaginatedShipmentsResponse>(EMPTY_SHIPMENT_PAGE);
   const [mapShipments, setMapShipments] = useState<ShipmentMapFeature[]>([]);
+  const [mapTotal, setMapTotal] = useState(0);
   const [mapLoading, setMapLoading] = useState(true);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
   const [selected, setSelected] = useState<DrawerSelection | null>(null);
-  const { loading, error, setLoading, setError } = useAnalysisStore();
+  const { loading, error, result, setLoading, setError, setResult } =
+    useAnalysisStore();
   const [stepIdx, setStepIdx] = useState(0);
   const [filter, setFilter] = useState<RiskFilter>("ALL");
   const [tab, setTab] = useState<DashboardTab>("shipments");
@@ -342,10 +348,12 @@ export default function Dashboard() {
         })
         .then((mapData) => {
           setMapShipments(mapData.shipments);
+          setMapTotal(mapData.total ?? mapData.shipments.length);
         })
         .catch((err: any) => {
           if (err.name === "AbortError") return;
           setMapShipments([]);
+          setMapTotal(0);
           setError(
             "Dashboard map could not load. Shipment data is still available.",
           );
@@ -362,10 +370,9 @@ export default function Dashboard() {
         })
         .catch((err: any) => {
           if (err.name === "AbortError") return;
-          setResult(null);
         });
     },
-    [filter, page, setError],
+    [filter, page, setError, setResult],
   );
 
   useEffect(() => {
@@ -526,7 +533,9 @@ export default function Dashboard() {
         setError(res.detail || "Upload failed");
       }
     } catch (err: any) {
-      setError(err.message || "Upload failed. Is the FastAPI server running on :8000?");
+      setError(
+        err.message || "Upload failed. Is the FastAPI server running on :8000?",
+      );
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -575,20 +584,6 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <label
-            className={cn(
-              "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] cursor-pointer bg-surface border border-border text-subtle hover:text-primary transition-colors",
-              uploading && "opacity-50 pointer-events-none",
-            )}
-          >
-            {uploading ? <Spinner size={12} /> : "↑"} Upload CSV
-            <input
-              type="file"
-              accept=".csv"
-              onChange={handleUpload}
-              className="hidden"
-            />
-          </label>
           <Button
             onClick={() => runAnalysis(true)}
             disabled={loading}
@@ -621,7 +616,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-4 gap-3 mb-5">
         <StatCard
           label="Shipments"
-          value={shipments.length}
+          value={shipmentPage.total}
           sub="Loaded"
           accentColor="#1f6feb"
           icon="◫"
@@ -642,7 +637,7 @@ export default function Dashboard() {
         />
         <StatCard
           label="On Map"
-          value={mapShipments.length}
+          value={mapTotal}
           sub="Routes rendered"
           accentColor="#8b5cf6"
           icon="⊕"
@@ -667,9 +662,6 @@ export default function Dashboard() {
                   {t}
                   {t === "signals" && signals.length > 0
                     ? ` (${signals.length})`
-                    : ""}
-                  {t === "map" && mapShipments.length > 0
-                    ? ` (${mapShipments.length})`
                     : ""}
                 </button>
               ))}
@@ -705,12 +697,12 @@ export default function Dashboard() {
 
           {tab === "shipments" && (
             <Card>
-              <div className="grid grid-cols-[100px_1.5fr_1.5fr_110px_110px_100px] px-5 py-2.5 border-b border-border text-[9px] text-muted uppercase tracking-widest">
+              <div className="grid grid-cols-[100px_1.5fr_1.5fr_110px_150px_100px] px-5 py-2.5 border-b border-border text-[9px] text-muted uppercase tracking-widest">
                 <span>ID</span>
                 <span>Vendor</span>
                 <span>Route</span>
                 <span>ETA</span>
-                <span>Status</span>
+                <span className="pl-5">Status</span>
                 <span>Delay</span>
               </div>
               {filteredRows.length === 0 ? (
@@ -723,6 +715,15 @@ export default function Dashboard() {
                 />
               ) : (
                 filteredRows.map((shipment) => {
+                  const hasDelay =
+                    !!shipment.delay_estimate &&
+                    shipment.delay_estimate !== "None";
+                  const delayText = hasDelay
+                    ? shipment.delay_estimate
+                    : "On time";
+                  const delayTextClass = hasDelay
+                    ? "text-red-400"
+                    : "text-emerald-400";
                   const isSel = selected?.shipment_id === shipment.shipment_id;
                   return (
                     <div
@@ -731,7 +732,7 @@ export default function Dashboard() {
                         setSelected(isSel ? null : toDrawerSelection(shipment))
                       }
                       className={cn(
-                        "grid grid-cols-[100px_1.5fr_1.5fr_110px_110px_100px] px-5 py-3 border-b border-border/50 cursor-pointer transition-colors",
+                        "grid grid-cols-[100px_1.5fr_1.5fr_110px_150px_100px] px-5 py-3 border-b border-border/50 cursor-pointer transition-colors",
                         isSel ? "bg-white/[0.03]" : "hover:bg-white/[0.02]",
                       )}
                     >
@@ -745,26 +746,19 @@ export default function Dashboard() {
                         {shipment.origin_city} → {shipment.dest_city}
                       </span>
                       <span className="text-subtle text-[11px]">
-                        {shipment.eta?.slice(5) ?? "—"}
+                        {formatEtaForTable(shipment.eta)}
                       </span>
-                      <span>
-                        <RiskBadge level={shipment.status} />
-                      </span>
-                      <span
-                        className={cn(
-                          "text-[12px]",
-                          shipment.delay_estimate &&
-                            shipment.delay_estimate !== "None"
-                            ? "text-red-400"
-                            : "text-emerald-400",
+                      <span className="pl-5">
+                        {shipment.status === "PENDING" ? (
+                          <span className="text-[12px] text-muted">
+                            Pending
+                          </span>
+                        ) : (
+                          <RiskBadge level={shipment.status} />
                         )}
-                      >
-                        {shipment.delay_estimate &&
-                        shipment.delay_estimate !== "None"
-                          ? shipment.delay_estimate
-                          : shipment.status === "PENDING"
-                            ? "Pending"
-                            : "On time"}
+                      </span>
+                      <span className={cn("text-[12px]", delayTextClass)}>
+                        {delayText}
                       </span>
                     </div>
                   );

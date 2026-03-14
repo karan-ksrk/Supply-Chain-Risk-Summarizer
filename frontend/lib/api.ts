@@ -123,7 +123,7 @@ export interface PipelineStats {
 }
 
 export interface AnalysisResult {
-  status: "success" | "no_signals" | "no_affected" | "failed";
+  status: "running" | "success" | "no_signals" | "no_affected" | "failed";
   run_id: number;
   generated_at: string;
   risk_reports: RiskReport[];

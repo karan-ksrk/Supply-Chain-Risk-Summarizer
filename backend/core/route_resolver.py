@@ -1,5 +1,6 @@
 import math
 from typing import Any
+from functools import lru_cache
 
 import requests
 from sqlalchemy.orm import Session
@@ -69,6 +70,7 @@ def _lookup_known(port: str | None, city: str | None, country: str | None) -> tu
     return None
 
 
+@lru_cache(maxsize=1024)
 def _geocode(query: str) -> tuple[float, float] | None:
     if not query:
         return None
@@ -201,16 +203,22 @@ def _build_searoute_geojson(origin: tuple[float, float], dest: tuple[float, floa
     return dict(feature) if isinstance(feature, dict) else None
 
 
-def build_map_feature(db: Session, shipment: dict, report: dict | None = None) -> dict:
+def build_map_feature(
+    db: Session,
+    shipment: dict,
+    report: dict | None = None,
+    *,
+    auto_commit: bool = True,
+) -> dict:
     route_key = _route_key(shipment)
     cached = crud.get_route_cache(db, route_key)
 
-    if cached and cached.normalized_coordinates:
+    if cached is not None:
         origin = {"lat": cached.origin_lat, "lng": cached.origin_lng}
         dest = {"lat": cached.dest_lat, "lng": cached.dest_lng}
         route = {
             "kind": cached.route_kind,
-            "coordinates": cached.normalized_coordinates,
+            "coordinates": cached.normalized_coordinates or [],
             "distance_nm": cached.distance_nm,
             "source": cached.route_source,
         }
@@ -237,23 +245,6 @@ def build_map_feature(db: Session, shipment: dict, report: dict | None = None) -
                 coordinates = _fallback_coordinates(origin_point, dest_point)
                 distance_nm = distance_nm or _haversine_nm(origin_point, dest_point)
 
-            crud.upsert_route_cache(db, {
-                "route_key": route_key,
-                "transport_mode": shipment.get("transport_mode") or "Unknown",
-                "origin_query": ", ".join(part for part in [shipment.get("origin_port"), shipment.get("origin_city"), shipment.get("origin_country")] if part),
-                "dest_query": ", ".join(part for part in [shipment.get("dest_port"), shipment.get("dest_city"), shipment.get("dest_country")] if part),
-                "origin_lat": origin_point[0],
-                "origin_lng": origin_point[1],
-                "dest_lat": dest_point[0],
-                "dest_lng": dest_point[1],
-                "route_kind": route_kind,
-                "route_source": route_source,
-                "distance_nm": distance_nm,
-                "raw_geojson": raw_geojson,
-                "normalized_coordinates": coordinates,
-                "route_metadata": {"provider": route_source},
-            })
-
             origin = {"lat": origin_point[0], "lng": origin_point[1]}
             dest = {"lat": dest_point[0], "lng": dest_point[1]}
             route = {
@@ -266,6 +257,23 @@ def build_map_feature(db: Session, shipment: dict, report: dict | None = None) -
             origin = {"lat": None, "lng": None}
             dest = {"lat": None, "lng": None}
             route = {"kind": "fallback", "coordinates": [], "distance_nm": None, "source": "fallback"}
+
+        crud.upsert_route_cache(db, {
+            "route_key": route_key,
+            "transport_mode": shipment.get("transport_mode") or "Unknown",
+            "origin_query": ", ".join(part for part in [shipment.get("origin_port"), shipment.get("origin_city"), shipment.get("origin_country")] if part),
+            "dest_query": ", ".join(part for part in [shipment.get("dest_port"), shipment.get("dest_city"), shipment.get("dest_country")] if part),
+            "origin_lat": origin["lat"],
+            "origin_lng": origin["lng"],
+            "dest_lat": dest["lat"],
+            "dest_lng": dest["lng"],
+            "route_kind": route["kind"],
+            "route_source": route["source"],
+            "distance_nm": route["distance_nm"],
+            "raw_geojson": raw_geojson,
+            "normalized_coordinates": route["coordinates"],
+            "route_metadata": {"provider": route["source"], "resolved": bool(origin_point and dest_point)},
+        }, commit=auto_commit)
 
     status = report.get("risk_level") if report else "PENDING"
 
