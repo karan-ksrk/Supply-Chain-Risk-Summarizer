@@ -110,11 +110,45 @@ def get_shipments(
 
 
 @app.get("/api/shipments/map")
-def get_shipments_map(db: Session = Depends(get_db)):
-    shipments = _get_shipments(db)
+def get_shipments_map(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    q: str | None = None,
+    risk_status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    normalized_status = _normalize_risk_status(risk_status)
     reports_by_shipment = _get_latest_reports_by_shipment(db)
-    features = [build_map_feature(db, shipment, reports_by_shipment.get(shipment.get("shipment_id"))) for shipment in shipments]
-    return {"shipments": features, "count": len(features)}
+
+    if _use_local_sample_shipments():
+        shipments = _filter_local_shipments(
+            [s.copy() for s in SAMPLE_SHIPMENTS],
+            q=q,
+            risk_status=normalized_status,
+            reports_by_shipment=reports_by_shipment,
+        )
+        total = len(shipments)
+        paged = shipments[(page - 1) * page_size: page * page_size]
+        features = [
+            build_map_feature(db, shipment, reports_by_shipment.get(shipment.get("shipment_id")))
+            for shipment in paged
+        ]
+        return _map_page_response(features, total, page, page_size)
+
+    shipment_ids, exclude_ids = _shipment_filters_from_status(normalized_status, reports_by_shipment)
+    shipments, total, _ = crud.get_shipments_page(
+        db,
+        page=page,
+        page_size=page_size,
+        search=q,
+        shipment_ids=shipment_ids,
+        exclude_ids=exclude_ids,
+    )
+    features = [
+        build_map_feature(db, _s(shipment), reports_by_shipment.get(shipment.shipment_id))
+        for shipment in shipments
+    ]
+    return _map_page_response(features, total, page, page_size)
 
 
 @app.get("/api/shipments/{shipment_id}")
@@ -366,6 +400,18 @@ def _shipment_page_response(shipments: list[dict], total: int, page: int, page_s
         "page_size": page_size,
         "total_pages": total_pages,
         "summary": summary,
+    }
+
+
+def _map_page_response(shipments: list[dict], total: int, page: int, page_size: int) -> dict:
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return {
+        "shipments": shipments,
+        "count": len(shipments),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
     }
 
 

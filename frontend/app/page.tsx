@@ -196,9 +196,32 @@ function DetailDrawer({ item, onClose }: { item: DrawerSelection; onClose: () =>
   );
 }
 
+function MapLoadingPanel() {
+  return (
+    <div className="p-4 animate-fade-in">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="h-3 w-[60%] rounded bg-border/70 animate-pulse" />
+        <div className="inline-flex items-center gap-2 text-[11px] text-muted">
+          <Spinner size={12} />
+          Rendering map routes...
+        </div>
+      </div>
+      <div className="h-[560px] rounded-xl border border-border bg-canvas relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.04] to-transparent animate-pulse" />
+        <div className="absolute left-6 right-6 top-10 h-2 rounded bg-border/60 animate-pulse" />
+        <div className="absolute left-10 right-10 top-24 h-2 rounded bg-border/50 animate-pulse" />
+        <div className="absolute left-20 right-20 top-40 h-2 rounded bg-border/40 animate-pulse" />
+        <div className="absolute left-12 bottom-24 w-2 h-2 rounded-full bg-accent/70 animate-ping" />
+        <div className="absolute right-14 top-20 w-2 h-2 rounded-full bg-accent/70 animate-ping" />
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [shipmentPage, setShipmentPage] = useState<PaginatedShipmentsResponse>(EMPTY_SHIPMENT_PAGE);
   const [mapShipments, setMapShipments] = useState<ShipmentMapFeature[]>([]);
+  const [mapLoading, setMapLoading] = useState(true);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [selected, setSelected] = useState<DrawerSelection | null>(null);
   const { loading, error, setLoading, setError } = useAnalysisStore();
@@ -226,8 +249,14 @@ export default function Dashboard() {
 
   const refreshAncillaryData = useCallback((signal?: AbortSignal) => {
     setError("");
+    setMapLoading(true);
 
-    api.getShipmentMap(signal)
+    api.getShipmentMap({
+      page,
+      pageSize: PAGE_SIZE,
+      riskStatus: filter === "ALL" ? undefined : filter,
+      signal,
+    })
       .then((mapData) => {
         setMapShipments(mapData.shipments);
       })
@@ -235,6 +264,10 @@ export default function Dashboard() {
         if (err.name === "AbortError") return;
         setMapShipments([]);
         setError("Dashboard map could not load. Shipment data is still available.");
+      })
+      .finally(() => {
+        if (signal?.aborted) return;
+        setMapLoading(false);
       });
 
     api.getLatestReport(signal)
@@ -245,7 +278,7 @@ export default function Dashboard() {
         if (err.name === "AbortError") return;
         setResult(null);
       });
-  }, [setError]);
+  }, [filter, page, setError]);
 
   useEffect(() => {
     const abortController = new AbortController();
@@ -456,9 +489,11 @@ export default function Dashboard() {
             <Card className="overflow-hidden">
               <CardHeader
                 title="Shipment Route Map"
-                right={<span>{filteredMap.length} routes visible</span>}
+                right={<span>{mapLoading ? "Loading routes..." : `${filteredMap.length} routes visible`}</span>}
               />
-              {mapShipments.length === 0 ? (
+              {mapLoading ? (
+                <MapLoadingPanel />
+              ) : mapShipments.length === 0 ? (
                 <Empty message="No shipment routes available yet" />
               ) : (
                 <div className="p-4">
@@ -483,6 +518,14 @@ export default function Dashboard() {
                       onSelect={(feature) => setSelected(mapFeatureToSelection(feature))}
                     />
                   </div>
+
+                  <PaginationControls
+                    page={shipmentPage.page}
+                    totalPages={shipmentPage.total_pages}
+                    totalItems={shipmentPage.total}
+                    pageSize={shipmentPage.page_size}
+                    onPageChange={setPage}
+                  />
                 </div>
               )}
             </Card>

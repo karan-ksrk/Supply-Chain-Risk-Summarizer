@@ -88,6 +88,10 @@ export interface ShipmentMapFeature {
 export interface ShipmentMapResponse {
   shipments: ShipmentMapFeature[];
   count: number;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }
 
 export interface ShipmentSummary {
@@ -185,8 +189,12 @@ export const api = {
   getShipment: (id: string, signal?: AbortSignal) =>
     apiFetch<{ shipment: Shipment; risk_history: RiskReport[] }>(`/shipments/${id}`, { signal }),
 
-  getShipmentMap: (signal?: AbortSignal) =>
-    apiFetch<ShipmentMapResponse>("/shipments/map", { signal }),
+  getShipmentMap: ({ page = 1, pageSize = 20, q, riskStatus, signal }: GetShipmentsParams = {}) => {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (q && q.trim()) params.set("q", q.trim());
+    if (riskStatus) params.set("risk_status", riskStatus);
+    return apiFetch<ShipmentMapResponse>(`/shipments/map?${params.toString()}`, { signal });
+  },
 
   analyze: (useMockNews = false) =>
     apiFetch<AnalysisResult>("/analyze", {
