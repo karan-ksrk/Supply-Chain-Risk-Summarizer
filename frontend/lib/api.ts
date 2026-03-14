@@ -131,6 +131,18 @@ export interface AnalysisResult {
   stats: PipelineStats;
 }
 
+export type AnalysisStreamEvent =
+  | { type: "start"; run_id: number; generated_at: string }
+  | { type: "stage"; stage: string; message: string; [key: string]: unknown }
+  | { type: "signal"; index: number; total: number; signal: NewsSignal }
+  | { type: "signal_skipped"; index: number; total: number; article_title: string }
+  | { type: "signal_error"; index: number; total: number; article_title: string; message: string }
+  | { type: "matched_shipments"; affected_shipments: number; total_shipments: number }
+  | { type: "risk_report"; index: number; total: number; report: RiskReport }
+  | { type: "risk_report_error"; index: number; total: number; shipment_id?: string; message: string }
+  | { type: "error"; message: string }
+  | { type: "complete"; result: AnalysisResult };
+
 export interface AnalysisRun {
   id: number;
   run_at: string;
@@ -149,6 +161,13 @@ export interface HealthResponse {
   llm_provider: string;
   shipment_count: number;
   last_run: string | null;
+}
+
+export interface UploadCsvResponse {
+  status: "ok" | "error";
+  count?: number;
+  preview?: Record<string, unknown>[];
+  detail?: string;
 }
 
 export interface GetShipmentsParams {
@@ -202,6 +221,72 @@ export const api = {
       body: JSON.stringify({ use_mock_news: useMockNews, max_articles: 15 }),
     }),
 
+  analyzeStream: async (
+    useMockNews = false,
+    onEvent?: (event: AnalysisStreamEvent) => void,
+    signal?: AbortSignal,
+  ) => {
+    const res = await fetch(`${BASE}/analyze/stream`, {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({ use_mock_news: useMockNews, max_articles: 15 }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "API error");
+    }
+
+    if (!res.body) throw new Error("Streaming response is not available.");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResult: AnalysisResult | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const chunk = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+
+        const data = chunk
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("\n");
+
+        if (!data) continue;
+
+        const event = JSON.parse(data) as AnalysisStreamEvent;
+        onEvent?.(event);
+
+        if (event.type === "error") {
+          throw new Error(event.message || "Analysis failed.");
+        }
+        if (event.type === "complete") {
+          finalResult = event.result;
+        }
+      }
+    }
+
+    if (!finalResult) {
+      throw new Error("Stream ended before completion.");
+    }
+    return finalResult;
+  },
+
   analyzeMock: () =>
     apiFetch<AnalysisResult>("/analyze/mock", { method: "POST" }),
 
@@ -211,11 +296,23 @@ export const api = {
   getRuns: (limit = 20, signal?: AbortSignal) =>
     apiFetch<{ runs: AnalysisRun[] }>(`/runs?limit=${limit}`, { signal }),
 
-  uploadCsv: (file: File) => {
+  uploadCsv: async (file: File): Promise<UploadCsvResponse> => {
     const fd = new FormData();
     fd.append("file", file);
-    return fetch(`${BASE}/upload-csv`, { method: "POST", body: fd }).then((r) =>
-      r.json()
-    );
+    try {
+      const res = await fetch(`${BASE}/upload-csv`, { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.detail || "Upload failed");
+      }
+      return body as UploadCsvResponse;
+    } catch (err: any) {
+      if (err instanceof TypeError) {
+        throw new Error(
+          `Unable to reach backend API (${BASE}). Ensure FastAPI is running on port 8000.`,
+        );
+      }
+      throw err;
+    }
   },
 };

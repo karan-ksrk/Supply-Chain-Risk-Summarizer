@@ -5,22 +5,27 @@ backend/server.py — FastAPI + PostgreSQL
 from contextlib import asynccontextmanager
 import io
 import csv
+import json
 import os
-import os
+from collections.abc import Callable
+from queue import Queue
+from threading import Thread
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.news_fetcher import fetch_news
-from backend.core.risk_analyzer import analyze_risks
+from backend.core.risk_analyzer import analyze_single_shipment_risk
 from backend.core.route_resolver import build_map_feature
 from backend.core.shipment_matcher import match_shipments_to_signals
-from backend.core.signal_extractor import extract_signals
+from backend.core.signal_extractor import extract_signal
 from backend.data.shipments import SAMPLE_SHIPMENTS
 from backend.db import crud
-from backend.db.database import get_db, init_db
+from backend.db.database import SessionLocal, get_db, init_db
 from backend.providers.llm import PROVIDER
 
 _is_running = False
@@ -171,65 +176,93 @@ def get_shipment(shipment_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/analyze")
-async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db)):
+async def analyze(req: AnalyzeRequest):
     global _is_running
-    global _local_latest_report
     if _is_running:
         raise HTTPException(409, "Analysis already running.")
     _is_running = True
-    run = crud.create_run(db, llm_provider=PROVIDER, used_mock_news=req.use_mock_news)
 
     def _do_analyze():
-        global _local_latest_report
-        shipments = _get_shipments(db)
-        articles = MOCK_NEWS if req.use_mock_news else fetch_news(req.max_articles, shipments=shipments)
-        signals = extract_signals(articles)
-
-        if not signals:
-            crud.complete_run(db, run, _empty_stats(shipments, articles), status="no_signals")
-            payload = {"status": "no_signals", "run_id": run.id, "generated_at": run.run_at.isoformat(), "risk_reports": [], "signals": [], "stats": _empty_stats(shipments, articles)}
+        db = SessionLocal()
+        run = crud.create_run(db, llm_provider=PROVIDER, used_mock_news=req.use_mock_news)
+        try:
+            return _run_analysis_pipeline(db, run, req)
+        except Exception as e:
             if _use_local_sample_shipments():
-                _local_latest_report = payload
-            return payload
-
-        crud.save_signals(db, run.id, signals)
-        affected = match_shipments_to_signals([s.copy() for s in shipments], signals)
-
-        if not affected:
-            stats = {**_empty_stats(shipments, articles), "signals_extracted": len(signals)}
-            crud.complete_run(db, run, stats, status="no_affected")
-            payload = {"status": "no_affected", "run_id": run.id, "generated_at": run.run_at.isoformat(), "risk_reports": [], "signals": signals, "stats": stats}
-            if _use_local_sample_shipments():
-                _local_latest_report = payload
-            return payload
-
-        risk_reports = analyze_risks(affected)
-        if not _use_local_sample_shipments():
-            crud.save_risk_reports(db, run.id, risk_reports)
-        stats = _build_stats(risk_reports, shipments, articles, signals)
-        crud.complete_run(db, run, stats)
-        payload = {"status": "success", "run_id": run.id, "generated_at": run.run_at.isoformat(), "risk_reports": risk_reports, "signals": signals, "stats": stats}
-        if _use_local_sample_shipments():
-            _local_latest_report = payload
-
-        return payload
+                global _local_latest_report
+                _local_latest_report = None
+            crud.complete_run(db, run, {}, status="failed", error=str(e))
+            raise
+        finally:
+            db.close()
 
     try:
         payload = await run_in_threadpool(_do_analyze)
         return payload
-
     except Exception as e:
-        if _use_local_sample_shipments():
-            _local_latest_report = None
-        crud.complete_run(db, run, {}, status="failed", error=str(e))
         raise HTTPException(500, str(e))
     finally:
         _is_running = False
 
 
+@app.post("/api/analyze/stream")
+async def analyze_stream(req: AnalyzeRequest):
+    global _is_running
+    if _is_running:
+        raise HTTPException(409, "Analysis already running.")
+    _is_running = True
+
+    event_queue: Queue[dict | None] = Queue()
+
+    def emit(event: dict):
+        event_queue.put(event)
+
+    def worker():
+        global _is_running
+        global _local_latest_report
+
+        db = SessionLocal()
+        run = crud.create_run(db, llm_provider=PROVIDER, used_mock_news=req.use_mock_news)
+        emit({
+            "type": "start",
+            "run_id": run.id,
+            "generated_at": run.run_at.isoformat(),
+        })
+        try:
+            payload = _run_analysis_pipeline(db, run, req, emit=emit)
+            emit({"type": "complete", "result": payload})
+        except Exception as e:
+            if _use_local_sample_shipments():
+                _local_latest_report = None
+            crud.complete_run(db, run, {}, status="failed", error=str(e))
+            emit({"type": "error", "message": str(e)})
+        finally:
+            db.close()
+            _is_running = False
+            event_queue.put(None)
+
+    Thread(target=worker, daemon=True).start()
+
+    async def event_generator():
+        while True:
+            event = await run_in_threadpool(event_queue.get)
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.post("/api/analyze/mock")
-async def analyze_mock(db: Session = Depends(get_db)):
-    return await analyze(AnalyzeRequest(**{"use_mock_news": True}), db)
+async def analyze_mock():
+    return await analyze(AnalyzeRequest(**{"use_mock_news": True}))
 
 
 @app.get("/api/reports/latest")
@@ -283,6 +316,158 @@ async def clear_database(db: Session = Depends(get_db)):
     crud.delete_all_data(db)
     _local_latest_report = None
     return {"status": "ok", "message": "Database cleared."}
+
+
+def _run_analysis_pipeline(
+    db: Session,
+    run,
+    req: AnalyzeRequest,
+    emit: Callable[[dict], None] | None = None,
+) -> dict:
+    global _local_latest_report
+
+    shipments = _get_shipments(db)
+    _emit_stage(
+        emit,
+        stage="fetching_news",
+        message="Fetching live news...",
+        total_shipments=len(shipments),
+    )
+    articles = MOCK_NEWS if req.use_mock_news else fetch_news(req.max_articles, shipments=shipments)
+
+    _emit_stage(
+        emit,
+        stage="extracting_signals",
+        message="Extracting risk signals...",
+        total_articles=len(articles),
+    )
+    signals: list[dict] = []
+    for idx, article in enumerate(articles, start=1):
+        try:
+            signal = extract_signal(article)
+            if signal is None:
+                _emit_event(emit, {
+                    "type": "signal_skipped",
+                    "index": idx,
+                    "total": len(articles),
+                    "article_title": article.get("title", ""),
+                })
+                continue
+            signals.append(signal)
+            _emit_event(emit, {
+                "type": "signal",
+                "index": idx,
+                "total": len(articles),
+                "signal": signal,
+            })
+        except Exception as e:
+            _emit_event(emit, {
+                "type": "signal_error",
+                "index": idx,
+                "total": len(articles),
+                "article_title": article.get("title", ""),
+                "message": str(e),
+            })
+
+    if not signals:
+        stats = _empty_stats(shipments, articles)
+        crud.complete_run(db, run, stats, status="no_signals")
+        payload = {
+            "status": "no_signals",
+            "run_id": run.id,
+            "generated_at": run.run_at.isoformat(),
+            "risk_reports": [],
+            "signals": [],
+            "stats": stats,
+        }
+        if _use_local_sample_shipments():
+            _local_latest_report = payload
+        _emit_stage(emit, stage="finalizing", message="Finalizing report...")
+        return payload
+
+    crud.save_signals(db, run.id, signals)
+    _emit_stage(emit, stage="matching_shipments", message="Matching shipments...", signals_extracted=len(signals))
+    affected = match_shipments_to_signals([s.copy() for s in shipments], signals)
+    _emit_event(emit, {
+        "type": "matched_shipments",
+        "affected_shipments": len(affected),
+        "total_shipments": len(shipments),
+    })
+
+    if not affected:
+        stats = {**_empty_stats(shipments, articles), "signals_extracted": len(signals)}
+        crud.complete_run(db, run, stats, status="no_affected")
+        payload = {
+            "status": "no_affected",
+            "run_id": run.id,
+            "generated_at": run.run_at.isoformat(),
+            "risk_reports": [],
+            "signals": signals,
+            "stats": stats,
+        }
+        if _use_local_sample_shipments():
+            _local_latest_report = payload
+        _emit_stage(emit, stage="finalizing", message="Finalizing report...")
+        return payload
+
+    _emit_stage(
+        emit,
+        stage="analyzing_shipments",
+        message="Running LLM analysis...",
+        total_affected=len(affected),
+    )
+    risk_reports: list[dict] = []
+    for idx, shipment in enumerate(affected, start=1):
+        try:
+            report = analyze_single_shipment_risk(shipment)
+            risk_reports.append(report)
+            _emit_event(emit, {
+                "type": "risk_report",
+                "index": idx,
+                "total": len(affected),
+                "report": report,
+            })
+        except Exception as e:
+            _emit_event(emit, {
+                "type": "risk_report_error",
+                "index": idx,
+                "total": len(affected),
+                "shipment_id": shipment.get("shipment_id"),
+                "message": str(e),
+            })
+
+    if not _use_local_sample_shipments():
+        crud.save_risk_reports(db, run.id, risk_reports)
+
+    _emit_stage(emit, stage="finalizing", message="Finalizing report...")
+    stats = _build_stats(risk_reports, shipments, articles, signals)
+    crud.complete_run(db, run, stats)
+    payload = {
+        "status": "success",
+        "run_id": run.id,
+        "generated_at": run.run_at.isoformat(),
+        "risk_reports": risk_reports,
+        "signals": signals,
+        "stats": stats,
+    }
+    if _use_local_sample_shipments():
+        _local_latest_report = payload
+    return payload
+
+
+def _emit_stage(
+    emit: Callable[[dict], None] | None,
+    *,
+    stage: str,
+    message: str,
+    **extra,
+):
+    _emit_event(emit, {"type": "stage", "stage": stage, "message": message, **extra})
+
+
+def _emit_event(emit: Callable[[dict], None] | None, event: dict):
+    if emit:
+        emit(event)
 
 
 # ── Serializers ──────────────────────────────────────────────
@@ -386,7 +571,8 @@ def _shipment_filters_from_status(risk_status: str | None, reports_by_shipment: 
     report_ids = list(reports_by_shipment.keys())
     if risk_status == "PENDING":
         return None, report_ids
-    matching = [shipment_id for shipment_id, report in reports_by_shipment.items() if report.get("risk_level") == risk_status]
+    matching = [shipment_id for shipment_id, report in reports_by_shipment.items() if report.get("risk_level")
+                == risk_status]
     return matching, None
 
 

@@ -6,6 +6,9 @@ Step 1 of the smart pipeline:
   These signals are later used for pure Python matching (no LLM cost per shipment).
 """
 
+from collections.abc import Callable
+from typing import Any
+
 from backend.providers.llm import call_llm, parse_json_response
 
 SYSTEM_PROMPT = """You are a logistics risk signal extractor. 
@@ -36,7 +39,33 @@ and use empty arrays for all list fields.
 """
 
 
-def extract_signals(articles: list[dict]) -> list[dict]:
+def extract_signal(article: dict) -> dict | None:
+    """
+    Extract a single structured signal from one article.
+    Returns None when article is not logistics-relevant.
+    """
+    prompt = EXTRACTION_PROMPT.format(
+        title=article["title"],
+        description=article.get("description", "No description available"),
+    )
+
+    raw = call_llm(prompt=prompt, system=SYSTEM_PROMPT, expect_json=True)
+    signal = parse_json_response(raw)
+
+    if not signal.get("is_logistics_relevant", False):
+        return None
+
+    signal["source_title"] = article["title"]
+    signal["source_url"] = article.get("url", "")
+    signal["published_at"] = article.get("published_at", "")
+    signal["source"] = article.get("source", "")
+    return signal
+
+
+def extract_signals(
+    articles: list[dict],
+    on_article_processed: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict]:
     """
     Runs one LLM call per article to extract structured signals.
     Filters out non-logistics articles automatically.
@@ -46,32 +75,43 @@ def extract_signals(articles: list[dict]) -> list[dict]:
 
     print(f"🔍 Extracting risk signals from {len(articles)} articles...")
 
+    total = len(articles)
+
     for i, article in enumerate(articles):
         try:
-            prompt = EXTRACTION_PROMPT.format(
-                title=article["title"],
-                description=article.get("description", "No description available"),
-            )
+            signal = extract_signal(article)
 
-            raw = call_llm(prompt=prompt, system=SYSTEM_PROMPT, expect_json=True)
-            signal = parse_json_response(raw)
-
-            # Skip non-relevant articles
-            if not signal.get("is_logistics_relevant", False):
+            if signal is None:
                 print(f"   [{i+1}] ⏭  Skipped (not logistics-relevant): {article['title'][:60]}...")
+                if on_article_processed:
+                    on_article_processed({
+                        "index": i + 1,
+                        "total": total,
+                        "relevant": False,
+                        "article_title": article.get("title", ""),
+                    })
                 continue
-
-            # Attach original article metadata
-            signal["source_title"] = article["title"]
-            signal["source_url"] = article.get("url", "")
-            signal["published_at"] = article.get("published_at", "")
-            signal["source"] = article.get("source", "")
 
             signals.append(signal)
             print(f"   [{i+1}] ✓  {signal['severity']} | {signal['risk_type']} | {article['title'][:55]}...")
+            if on_article_processed:
+                on_article_processed({
+                    "index": i + 1,
+                    "total": total,
+                    "relevant": True,
+                    "signal": signal,
+                })
 
         except Exception as e:
             print(f"   [{i+1}] ✗  Failed to extract signal: {e}")
+            if on_article_processed:
+                on_article_processed({
+                    "index": i + 1,
+                    "total": total,
+                    "relevant": False,
+                    "error": str(e),
+                    "article_title": article.get("title", ""),
+                })
             continue
 
     print(f"\n   → {len(signals)} relevant risk signals extracted\n")
