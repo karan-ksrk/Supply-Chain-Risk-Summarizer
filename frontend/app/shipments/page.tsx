@@ -92,7 +92,7 @@ export default function ShipmentsPage() {
 
       {/* Table */}
       <Card>
-        <div className="grid grid-cols-[100px_1fr_1fr_1fr_80px_80px_110px_80px] px-5 py-2.5 border-b border-border text-[9px] text-muted uppercase tracking-widest">
+        <div className="grid grid-cols-[100px_1fr_1fr_1fr_80px_100px_110px_100px] gap-4 px-5 py-2.5 border-b border-border text-[9px] text-muted uppercase tracking-widest">
           <span>ID</span><span>Vendor</span><span>Origin</span><span>Destination</span>
           <span>Mode</span><span>ETA</span><span>Risk Status</span><span>Delay</span>
         </div>
@@ -106,7 +106,7 @@ export default function ShipmentsPage() {
             return (
               <div key={s.shipment_id}
                 onClick={() => router.push(`/shipments/${s.shipment_id}`)}
-                className="grid grid-cols-[100px_1fr_1fr_1fr_80px_80px_110px_80px] px-5 py-3.5 border-b border-border/50 cursor-pointer hover:bg-white/[0.02] transition-colors group">
+                className="grid grid-cols-[100px_1fr_1fr_1fr_80px_100px_110px_100px] gap-4 px-5 py-3.5 border-b border-border/50 cursor-pointer hover:bg-white/[0.02] transition-colors group">
                 <span className="text-accent text-[12px] group-hover:underline">{s.shipment_id}</span>
                 <span className="text-primary text-[12px]">{s.vendor}</span>
                 <div>
